@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Typechecks test files only. Deliberately outside the `tsc --build` graph so tests are never emitted into any dist/ output. Uses bundler resolution because Vitest (Vite) resolves extensionless relative imports.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"]
+  },
+  "include": ["apps/*/tests/**/*.ts", "packages/*/tests/**/*.ts", "vitest.config.ts"]
+}

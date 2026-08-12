@@ -1,0 +1,56 @@
+# --- Dependencies ---
+node_modules/
+.pnpm-store/
+
+# --- Build output ---
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# --- Test / coverage output ---
+coverage/
+.vitest/
+
+# --- Environment & secrets ---
+# .env.example is intentionally tracked; every other env file is local-only.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
+service-account*.json
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Foreign lockfiles (pnpm-lock.yaml is the only lockfile) ---
+package-lock.json
+yarn.lock
+bun.lockb
+
+# --- Editor / OS noise ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+
+# --- Local agent tooling ---
+.claude/settings.local.json
+
+# --- Temp ---
+tmp/
+.tmp/
+*.tmp

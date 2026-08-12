@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": "Solution-style root config. Owns the `tsc --build` graph only. apps/web is built by Vite and typechecked separately; test files are typechecked via tsconfig.tests.json.",
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/config" },
+    { "path": "packages/runtime-core" },
+    { "path": "packages/db" },
+    { "path": "apps/api" },
+    { "path": "apps/simulator" }
+  ]
+}

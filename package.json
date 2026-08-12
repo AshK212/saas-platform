@@ -1,0 +1,44 @@
+{
+  "name": "ai-hybrid-multi-agent-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Hybrid Multi-Agent Platform - control-plane monorepo (Credit Phase, Step 1 foundation)",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20.19.0 <21",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --build && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p tsconfig.tests.json",
+    "test": "tsc --build && vitest run",
+    "build": "tsc --build && pnpm --filter @hybrid/web run build",
+    "build:api": "tsc --build apps/api",
+    "build:web": "tsc --build packages/contracts && pnpm --filter @hybrid/web run build",
+    "start:api": "pnpm --filter @hybrid/api run start",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build",
+    "test:db": "vitest run --config vitest.live.config.ts",
+    "db:generate": "pnpm --filter @hybrid/db run db:generate",
+    "db:check": "pnpm --filter @hybrid/db run db:check",
+    "db:migrate": "tsc --build packages/db && pnpm --filter @hybrid/db run db:migrate",
+    "clean": "tsc --build --clean",
+    "dev:api": "pnpm --filter @hybrid/api run dev",
+    "dev:web": "pnpm --filter @hybrid/web run dev"
+  },
+  "pnpm": {
+    "//": "Explicit allowlist so installs never depend on an interactive approval prompt (pnpm 10 blocks lifecycle scripts by default). esbuild is required by Vite, Vitest and tsx.",
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "20.19.43",
+    "eslint": "10.8.1",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.11.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
+  }
+}

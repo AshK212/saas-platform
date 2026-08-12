@@ -1,0 +1,52 @@
+# Render blueprint for the AI Hybrid Multi-Agent Platform.
+#
+# STATUS: NOT DEPLOYED, NOT VALIDATED AGAINST RENDER.
+# This file records the intended deployment shape. The build and start commands
+# mirror the scripts that ARE validated locally (`pnpm build:api`, `pnpm build:web`,
+# `pnpm start:api`). No Render service has been created and no deploy has run.
+#
+# OWNERSHIP: staging and production services must ultimately live under Ashir's
+# Render account, not a developer account.
+
+services:
+  # ---------------------------------------------------------------------------
+  # Control-plane API
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: hybrid-api
+    runtime: node
+    plan: starter
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build:api
+    startCommand: pnpm run start:api
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20.20.2
+      - key: NODE_ENV
+        value: production
+      # Render routes external traffic to the port in $PORT; bind all interfaces.
+      - key: HOST
+        value: 0.0.0.0
+      # Secrets are set in the Render dashboard and never committed.
+      # sync: false keeps the value out of this file and out of Git.
+      - key: DATABASE_URL
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Operator web shell (static)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: hybrid-web
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build:web
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: NODE_VERSION
+        value: 20.20.2
+      # Browser-visible only. Never place a secret behind a VITE_ prefix.
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

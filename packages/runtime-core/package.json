@@ -1,0 +1,16 @@
+{
+  "name": "@hybrid/runtime-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vendor-neutral runtime adapter boundary. Types only - no runtime implementations, no vendor SDKs.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"]
+}

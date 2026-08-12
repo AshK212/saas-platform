@@ -1,0 +1,35 @@
+{
+  "name": "@hybrid/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Database boundary for Neon PostgreSQL via Drizzle ORM. Step 1 establishes the package only - no domain schema.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "migrations"],
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
+    "db:migrate": "node dist/migrate.js"
+  },
+  "dependencies": {
+    "@hybrid/config": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/pg": "8.21.0",
+    "drizzle-kit": "0.31.10"
+  }
+}

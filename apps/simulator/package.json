@@ -1,0 +1,19 @@
+{
+  "name": "@hybrid/simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference client / simulator for the control plane. Step 1: executable skeleton only.",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hybrid/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "tsx": "4.23.12"
+  }
+}
