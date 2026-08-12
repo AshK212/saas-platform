@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 6 — workspace + membership authorization).
+Last updated: **2026-08-12** (Step 8 — agent registry, discovery & state).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -78,7 +78,14 @@ confirmed against a real client-owned Neon project:
 - the six Step 6 live workspace tests, currently **skipped**, including real
   transaction rollback (a failed creator membership must leave no orphaned
   workspace) and the membership uniqueness constraint. In-memory fakes cannot
-  prove either.
+  prove either;
+- the six Step 7 live API-credential tests, currently **skipped**, including
+  hash-only persistence and the `key_prefix` / `secret_hash` UNIQUE
+  constraints;
+- the six Step 8 live agent tests, currently **skipped**, including the
+  concurrent-registration race (two simultaneous registrations must yield
+  exactly one agent) and the `(workspace_id, external_id)` UNIQUE constraint.
+  Single-threaded JavaScript cannot establish either.
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified

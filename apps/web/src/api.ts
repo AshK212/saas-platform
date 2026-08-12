@@ -1,8 +1,19 @@
 import {
+  agentListResponseSchema,
+  apiKeyListResponseSchema,
   AUTH_LOGOUT_PATH,
   AUTH_MAGIC_LINK_PATH,
   AUTH_ME_PATH,
+  createApiKeyRequestSchema,
+  createApiKeyResponseSchema,
   createWorkspaceRequestSchema,
+  revokeApiKeyPath,
+  revokeApiKeyResponseSchema,
+  workspaceAgentsPath,
+  workspaceApiKeysPath,
+  type AgentSummary,
+  type ApiKeySummary,
+  type IssuedApiKey,
   currentUserResponseSchema,
   magicLinkRequestSchema,
   magicLinkResponseSchema,
@@ -106,6 +117,85 @@ export async function createWorkspace(name: string): Promise<WorkspaceSummary> {
     throw new Error('Unexpected response from the server.');
   }
   return parsed.data.workspace;
+}
+
+/**
+ * Lists a workspace's agents, most recently seen first.
+ *
+ * Read-only: the browser never registers agents. Registration is a machine
+ * operation authenticated with an API key.
+ */
+export async function listAgents(workspaceId: string): Promise<AgentSummary[]> {
+  const response = await fetch(workspaceAgentsPath(workspaceId), { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error('Could not load agents.');
+  }
+
+  const parsed = agentListResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.agents;
+}
+
+/** Lists a workspace's API credentials. Safe metadata only - never a key. */
+export async function listApiKeys(workspaceId: string): Promise<ApiKeySummary[]> {
+  const response = await fetch(workspaceApiKeysPath(workspaceId), { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error('Could not load API keys.');
+  }
+
+  const parsed = apiKeyListResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.apiKeys;
+}
+
+/**
+ * Issues an API key.
+ *
+ * SHOW-ONCE: the returned `key` is the only time plaintext will ever exist on
+ * the client. It is handed straight to transient React state and deliberately
+ * never written to localStorage, sessionStorage or IndexedDB.
+ */
+export async function createApiKey(workspaceId: string, name: string): Promise<IssuedApiKey> {
+  const parsedRequest = createApiKeyRequestSchema.safeParse({ name });
+  if (!parsedRequest.success) {
+    throw new Error('Enter a name for the key.');
+  }
+
+  const response = await postJson(workspaceApiKeysPath(workspaceId), parsedRequest.data);
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Only workspace operators can create API keys.'
+        : 'Could not create the API key.',
+    );
+  }
+
+  const parsed = createApiKeyResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.apiKey;
+}
+
+/** Revokes a key. The server invalidates it immediately; no key is returned. */
+export async function revokeApiKey(
+  workspaceId: string,
+  credentialId: string,
+): Promise<ApiKeySummary> {
+  const response = await postJson(revokeApiKeyPath(workspaceId, credentialId), {});
+  if (!response.ok) {
+    throw new Error('Could not revoke the API key.');
+  }
+
+  const parsed = revokeApiKeyResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.apiKey;
 }
 
 /**

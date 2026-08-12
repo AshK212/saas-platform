@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
+import type { AgentStore } from './agents/store.js';
+import type { ApiKeyStore } from './api-keys/store.js';
+import { systemClock, type Clock } from './auth/clock.js';
 import type { AuthService } from './auth/service.js';
+import { createAgentRoutes } from './routes/agents.js';
+import { createApiKeyRoutes } from './routes/api-keys.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createReadinessRoutes, type DatabaseReadinessProbe } from './routes/ready.js';
@@ -46,16 +51,32 @@ export interface AppDependencies {
    * those routes then answer 503 while liveness stays unaffected.
    */
   readonly workspaceStore?: WorkspaceStore | undefined;
+
+  /**
+   * API-credential persistence. `undefined` when the database is unconfigured -
+   * those routes then answer 503 while liveness stays unaffected.
+   */
+  readonly apiKeyStore?: ApiKeyStore | undefined;
+
+  /**
+   * Agent registry persistence. `undefined` when the database is unconfigured -
+   * those routes then answer 503 while liveness stays unaffected.
+   */
+  readonly agentStore?: AgentStore | undefined;
+
+  /** Time source. Injectable so credential tests can control timestamps. */
+  readonly clock?: Clock;
 }
 
 /**
  * Composes the control-plane API.
  *
- * STEP 6 SCOPE
+ * STEP 8 SCOPE
  * ------------
- * Liveness, readiness, authentication, and workspace membership authorization.
- * API keys, agents, events, policies, prechecks, ledger, receipts, sharing and
- * demo surfaces are intentionally absent.
+ * Liveness, readiness, authentication, workspace membership authorization,
+ * workspace API credentials, and the agent registry. Events, policies,
+ * prechecks, ledger, receipts, sharing and demo surfaces are intentionally
+ * absent.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -113,6 +134,25 @@ export function createApp(dependencies: AppDependencies): Hono {
     createWorkspaceRoutes({
       store: dependencies.workspaceStore,
       authService: dependencies.authService,
+    }),
+  );
+  app.route(
+    '/',
+    createApiKeyRoutes({
+      apiKeyStore: dependencies.apiKeyStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createAgentRoutes({
+      agentStore: dependencies.agentStore,
+      apiKeyStore: dependencies.apiKeyStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
+      clock: dependencies.clock ?? systemClock,
     }),
   );
 

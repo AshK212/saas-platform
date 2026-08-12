@@ -14,6 +14,8 @@ import { createApp } from './app.js';
 import { systemClock } from './auth/clock.js';
 import { createResendEmailSender } from './auth/email.js';
 import { createAuthService, type AuthService } from './auth/service.js';
+import { createDrizzleAgentStore } from './agents/store.js';
+import { createDrizzleApiKeyStore } from './api-keys/store.js';
 import { createDrizzleAuthStore } from './auth/store.js';
 import { createDrizzleWorkspaceStore } from './workspaces/store.js';
 import { type DatabaseReadinessProbe } from './routes/ready.js';
@@ -100,6 +102,9 @@ function main(): void {
   const pool = createPoolIfConfigured(config);
   const authService = createAuthServiceIfConfigured(config, pool);
 
+  // One client shared by the workspace and credential stores.
+  const db = pool === undefined ? undefined : createDatabaseClient(pool);
+
   const probeDatabase: DatabaseReadinessProbe = async () => {
     const result = await checkDatabaseReadiness(pool);
     if (result.status !== 'ok' && result.diagnostic !== undefined) {
@@ -115,8 +120,9 @@ function main(): void {
     appUrl: config.appUrl,
     secureCookies: config.isProduction,
     webOrigin: config.webOrigin,
-    workspaceStore:
-      pool === undefined ? undefined : createDrizzleWorkspaceStore(createDatabaseClient(pool)),
+    workspaceStore: db === undefined ? undefined : createDrizzleWorkspaceStore(db),
+    apiKeyStore: db === undefined ? undefined : createDrizzleApiKeyStore(db),
+    agentStore: db === undefined ? undefined : createDrizzleAgentStore(db),
   });
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {

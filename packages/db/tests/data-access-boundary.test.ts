@@ -209,9 +209,22 @@ describe('repository factories require a workspace scope', () => {
 });
 
 describe('every repository source file scopes its queries', () => {
-  const REPOSITORY_FILES = ['agents.ts', 'events.ts', 'runtime-profiles.ts'];
+  /** Files whose every statement is a read. */
+  const READ_ONLY_FILES = ['events.ts', 'runtime-profiles.ts'];
 
-  it.each(REPOSITORY_FILES)('%s references workspaceId in every query builder', (fileName) => {
+  /**
+   * Files that also perform SCOPED writes.
+   *
+   * Tenant-scoped mutation belongs in a repository - that is what keeps it
+   * inside the tenant boundary. These are enumerated so a new writing
+   * repository is a deliberate, reviewed addition rather than something that
+   * slips past a blanket "no writes" rule.
+   */
+  const WRITING_FILES = ['agents.ts', 'api-credentials.ts'];
+
+  const REPOSITORY_FILES = [...READ_ONLY_FILES, ...WRITING_FILES];
+
+  it.each(READ_ONLY_FILES)('%s references workspaceId in every query builder', (fileName) => {
     const source = readFileSync(
       path.join(PACKAGE_ROOT, 'src', 'repositories', fileName),
       'utf8',
@@ -250,6 +263,9 @@ describe('resolvers are the only unscoped reads, and stay bounded', () => {
       .sort();
 
     expect(functions).toEqual([
+      // Discovers a workspace from a presented API credential. Cannot take a
+      // scope, because producing one is its purpose.
+      'authenticateApiCredential',
       'authorizeWorkspaceForUser',
       'findDemoWorkspaceBySlug',
       'findMembership',
@@ -257,6 +273,32 @@ describe('resolvers are the only unscoped reads, and stay bounded', () => {
       'listMembershipsForUser',
       'listWorkspacesForUser',
     ]);
+  });
+
+  it('the credential resolver exposes no cross-tenant search', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'resolvers', 'api-credentials.ts'),
+      'utf8',
+    );
+
+    // Possession of a valid key is the only way in: the single query matches
+    // on prefix AND hash. There is no "list credentials" or "find by
+    // workspace" function here to enumerate with.
+    expect((source.match(/\.select\(/g) ?? []).length).toBe(1);
+    expect(source).toContain('eq(apiCredentials.keyPrefix, keyPrefix)');
+    expect(source).toContain('eq(apiCredentials.secretHash, secretHash)');
+    expect(source).toContain('isNull(apiCredentials.revokedAt)');
+  });
+
+  it('builds the credential scope from the row, never from an argument', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'resolvers', 'api-credentials.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain('createWorkspaceScope(row.workspaceId)');
+    // There is no workspace parameter to misuse.
+    expect(source).not.toMatch(/workspaceId:\s*string\s*[,)]/);
   });
 
   it('bounds every workspace-listing resolver on the authenticated user', () => {
@@ -330,18 +372,59 @@ describe('destructive live tests cannot target production', () => {
   });
 });
 
-describe('no mutation surface exists yet', () => {
-  it('repositories perform no writes', () => {
-    for (const fileName of ['agents.ts', 'events.ts', 'runtime-profiles.ts']) {
+describe('mutation surface stays narrow and scoped', () => {
+  it.each(['events.ts', 'runtime-profiles.ts'])('%s performs no writes', (fileName) => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
+
+    expect(source, fileName).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+  });
+
+  it.each(['agents.ts', 'api-credentials.ts'])('%s never deletes tenant rows', (fileName) => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
+
+    // Revocation and de-registration must be state changes, not deletions -
+    // the rows are audit history.
+    expect(source, fileName).not.toMatch(/\.delete\(/);
+  });
+
+  it('agent writes are workspace-anchored', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'agents.ts'), 'utf8');
+
+    // The inserted workspace comes from the scope, and the update carries the
+    // scope predicate. Neither takes a workspace argument.
+    expect(source).toContain('workspaceId: scope.workspaceId');
+    expect(source).toMatch(/\.update\(agents\)[\s\S]{0,200}agentScopePredicate\(scope\)/);
+    expect(source).not.toMatch(/workspaceId:\s*string\s*[,)]/);
+  });
+
+  it('agent registration conflicts on the workspace-scoped identity', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'agents.ts'), 'utf8');
+
+    // The unique index on (workspace_id, external_id) is the race arbiter.
+    expect(source).toContain('onConflictDoUpdate');
+    expect(source).toContain('target: [agents.workspaceId, agents.externalId]');
+  });
+
+  it('no repository exposes a generic patch/update-anything method', () => {
+    for (const fileName of ['agents.ts', 'api-credentials.ts', 'events.ts', 'runtime-profiles.ts']) {
       const source = readFileSync(
         path.join(PACKAGE_ROOT, 'src', 'repositories', fileName),
         'utf8',
       );
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-      // A generic write surface is how a read-only share or the public demo
-      // would eventually be able to mutate policy. Step 4 adds none.
-      expect(source, fileName).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+      // A generic mutator is how event ingest, a share link or the demo would
+      // eventually acquire authority over policy fields.
+      expect(code, fileName).not.toMatch(/\b(patch|updateAny|updateFields|setFields)\s*\(/i);
     }
+  });
+
+  it('agent registration cannot touch policy or runtime profile', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'agents.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).not.toContain('runtimeProfileId:');
+    expect(code).not.toMatch(/\bmode\b|agentPolicies|dailySpendCap|dailyPublishCap/);
   });
 
   it('resolvers perform no writes', () => {

@@ -72,7 +72,9 @@ export { describeConnectionTarget, redactConnectionStrings } from './redact.js';
 export {
   agentQueries,
   agentScopePredicate,
+  apiCredentialScopePredicate,
   createAgentRepository,
+  createApiCredentialRepository,
   createEventRepository,
   createRuntimeProfileRepository,
   eventQueries,
@@ -85,7 +87,11 @@ export {
 export type {
   AgentRepository,
   AgentRow,
+  ApiCredentialRepository,
+  ApiCredentialRow,
+  ApiCredentialSummary,
   DatabaseExecutor,
+  IssueApiCredentialInput,
   DatabaseTransaction,
   EventRepository,
   EventRow,
@@ -122,6 +128,7 @@ export type {
 // `authorizeWorkspaceForUser` is the ONLY sanctioned way for application code
 // to obtain a WorkspaceScope; see resolvers/authorization.ts.
 export {
+  authenticateApiCredential,
   authorizeWorkspaceForUser,
   findDemoWorkspaceBySlug,
   findMembership,
@@ -130,6 +137,7 @@ export {
   listWorkspacesForUser,
 } from './resolvers/index.js';
 export type {
+  AuthenticatedApiCredential,
   AuthorizedWorkspace,
   AuthorizedWorkspaceSummary,
   MembershipRole,

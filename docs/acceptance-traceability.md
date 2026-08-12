@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-12** (Step 6 — workspace + membership authorization).
+Last updated: **2026-08-12** (Step 8 — agent registry, discovery & state).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -36,9 +36,9 @@ only and does not redefine any criterion.
 | ID | Criterion | Classification | Status | Step 1 contribution |
 | --- | --- | --- | --- | --- |
 | AC-01 | Magic-link sign-in | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 5 implemented the complete flow** — request, single-use hashed token with 15-minute expiry, atomic redemption, HttpOnly `SameSite=Lax` session cookie, `/v1/auth/me`, server-side-revoking logout, Resend adapter. 96 auth tests pass and the flow was exercised end to end over real HTTP with a capturing mailer. **NOT PASS:** no client Neon, no client Resend and no staging exist, so the acceptance behaviour has never run in an authorized environment, no real email has been delivered, and the PostgreSQL concurrency race test is skipped. |
-| AC-02 | Workspace + API key | CREDIT | `PARTIAL — WORKSPACE COMPLETE, API KEY NOT STARTED` | **Step 6 completed the workspace half:** authenticated creation with atomic creator membership, membership-bounded listing, and per-request membership authorization producing a trusted `WorkspaceScope`. Cross-tenant access returns 404; CSRF origin protection added. **The API-key half is NOT STARTED** — show-once hashed, revocable keys are Step 7. AC-02 cannot be PASS until both halves exist and are demonstrated on staging. |
+| AC-02 | Workspace + API key | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both halves now exist.** Step 6: workspace creation with atomic creator membership, membership-bounded listing, per-request authorization producing a trusted `WorkspaceScope`. Step 7: operator-only issuance of `hmp_live_*` keys with 256-bit secrets, SHA-256 hash-at-rest, plaintext shown exactly once, immediate revocation, and bearer authentication that derives the workspace from the credential row. 118 credential tests pass and the flow was exercised end to end over real HTTP. **NOT PASS:** no client Neon, Resend or staging exists, so the acceptance behaviour has never run in an authorized environment. |
 | AC-03 | Documented simulator / reference command | CREDIT — baseline | `FOUNDATION ONLY` | `apps/simulator` exists, compiles, and runs as an executable skeleton. No acceptance command is documented and no scenario is implemented. |
-| AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `NOT STARTED` | None. |
+| AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
 | AC-05 | Timeline + agent filter | CREDIT — functional | `NOT STARTED` | None. The web app is an empty shell by design. |
 | AC-06 | Raw JSON event detail | CREDIT | `NOT STARTED` | None. |
 | AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `NOT STARTED` | None. |
@@ -93,6 +93,37 @@ Authentication also grants no workspace access, so it advances no other
 criterion. AC-02 in particular remains `NOT STARTED`: membership and workspace
 selection are Step 6.
 
+## Step 8 note: agent registry
+
+Step 8 built the registry AC-04 rests on. Registration is idempotent via
+`INSERT … ON CONFLICT (workspace_id, external_id) DO UPDATE`, so the database's
+own unique index — not application logic — is what prevents duplicate agents
+under concurrency.
+
+`last_seen_at` is **server-authoritative**: the request schema has no such
+field, so a client cannot assert its own liveness. That matters because
+last-seen is the entire substance of AC-04.
+
+Deliberately absent, and each belongs elsewhere: event ingest (Step 10),
+timeline (Step 11), policy/mode/caps (policy steps), and gone-dark detection
+(deferred AC-14).
+
+AC-04 moves to `IMPLEMENTED / STAGING VERIFICATION BLOCKED` — **not PASS**.
+
+## Step 7 note: API credentials
+
+Step 7 completed the credential half of AC-02. The security-critical outcome is
+that **an API-key request's tenant authority comes only from
+`api_credentials.workspace_id`** — verified over real HTTP with a workspace id
+injected simultaneously via query string and header, which was ignored.
+
+AC-02 moves from `PARTIAL` to `IMPLEMENTED / STAGING VERIFICATION BLOCKED`.
+**Not PASS**: nothing has been demonstrated in an authorized environment, and
+the live PostgreSQL credential suite (hash-only persistence, UNIQUE constraints)
+is skipped for want of a test database.
+
+See [api-authentication.md](api-authentication.md).
+
 ## Step 6 note: workspace authorization
 
 Step 6 connected identity to tenancy: authenticated users create workspaces
@@ -108,14 +139,13 @@ the first authenticated browser mutation. See
 AC-02 moves to `PARTIAL`, not `PASS`: API-key issuance is Step 7, and nothing
 has been demonstrated on staging.
 
-## Summary at Step 6
+## Summary at Step 8
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **1** (AC-01)
-- `PARTIAL`: **1** (AC-02 — workspace done, API key not started)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **3** (AC-01, AC-02, AC-04)
 - `FOUNDATION ONLY`: **2** (AC-03, AC-20)
 - `BLOCKED`: **1** (AC-21)
-- `NOT STARTED`: **11**
+- `NOT STARTED`: **10**
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,

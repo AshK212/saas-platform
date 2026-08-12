@@ -32,6 +32,47 @@ export type {
   MagicLinkResponse,
 } from './auth.js';
 export {
+  AGENT_REGISTER_PATH,
+  agentListResponseSchema,
+  agentResponseSchema,
+  agentSummarySchema,
+  registerAgentRequestSchema,
+  registerAgentResponseSchema,
+  workspaceAgentPath,
+  workspaceAgentsPath,
+} from './agents.js';
+export type {
+  AgentListResponse,
+  AgentResponse,
+  AgentSummary,
+  RegisterAgentRequest,
+  RegisterAgentResponse,
+} from './agents.js';
+export {
+  API_KEY_IDENTITY_PATH,
+  apiKeyIdentityResponseSchema,
+  apiKeyListResponseSchema,
+  apiKeyStatusSchema,
+  apiKeySummarySchema,
+  createApiKeyRequestSchema,
+  createApiKeyResponseSchema,
+  issuedApiKeySchema,
+  revokeApiKeyPath,
+  revokeApiKeyResponseSchema,
+  workspaceApiKeysPath,
+  WORKSPACE_API_KEYS_SEGMENT,
+} from './api-keys.js';
+export type {
+  ApiKeyIdentityResponse,
+  ApiKeyListResponse,
+  ApiKeyStatus,
+  ApiKeySummary,
+  CreateApiKeyRequest,
+  CreateApiKeyResponse,
+  IssuedApiKey,
+  RevokeApiKeyResponse,
+} from './api-keys.js';
+export {
   createWorkspaceRequestSchema,
   membershipRoleSchema,
   workspaceListResponseSchema,

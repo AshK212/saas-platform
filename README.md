@@ -2,15 +2,16 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 6, workspace + membership authorization.**
+**Current phase: Credit — Step 8, agent registry, discovery & state.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, and passwordless magic-link sign-in.
 
-Business functionality beyond sign-in and workspace selection is intentionally
-**not** implemented yet: no API keys, agents, events, policy, ledger, precheck,
-sharing or demo. **Being signed in grants access to no workspace** — tenant
-access comes only from a membership, re-proven on every request.
+Business functionality beyond sign-in, workspace selection, API credentials and
+the agent registry is intentionally **not** implemented yet: no events, policy,
+ledger, precheck, sharing or demo. **Being signed in grants access to no
+workspace** — tenant access comes only from a membership, re-proven on every
+request.
 
 ---
 
@@ -149,6 +150,41 @@ Membership is re-proven in SQL on every call, so holding another tenant's UUID
 returns `404` — identical to a workspace that does not exist. See
 [ADR 0003](docs/adr/0003-operator-workspace-authorization.md).
 
+## API keys
+
+```text
+POST /v1/workspaces/:id/api-keys              -> 201 { apiKey: { ..., key } }   operator only
+GET  /v1/workspaces/:id/api-keys              -> 200 { apiKeys: [...] }         operator only
+POST /v1/workspaces/:id/api-keys/:cid/revoke  -> 200 { apiKey }                 operator only
+
+GET  /v1/api-key/me      Authorization: Bearer hmp_live_...  -> { authenticated, workspaceId }
+```
+
+Format `hmp_live_<keyId>_<secret>` with a 256-bit secret; only a SHA-256 hash is
+stored. **Plaintext is shown once and is not recoverable** — lost keys are
+revoked and replaced.
+
+**The workspace is derived from the credential record.** A `workspace_id` sent
+in a body, query, header or path is ignored. Operator (cookie) and agent
+(bearer) authentication are separate domains and cannot substitute for each
+other. See [docs/api-authentication.md](docs/api-authentication.md).
+
+## Agents
+
+```text
+POST /v1/agents/register        Authorization: Bearer hmp_live_...   machine
+     { "agent_id": "agent-a", "name": "Agent A" }
+
+GET  /v1/workspaces/:id/agents           session + membership       operator
+GET  /v1/workspaces/:id/agents/:agentId  session + membership       operator
+```
+
+Registration is idempotent on `(workspace_id, external_id)`, so the same
+`agent_id` always resolves the same agent — and is a *different* agent in
+another workspace. `last_seen_at` is **server-authoritative**; a client-supplied
+timestamp is ignored. Machine callers cannot touch policy, mode, caps or runtime
+profile, and there is no generic agent update route.
+
 ### Tenant isolation
 
 Tenant-owned data is reachable only through workspace-scoped repositories:
@@ -190,6 +226,7 @@ behind that prefix.
 
 - [Architecture](docs/architecture.md) — foundation, boundaries and invariants
 - [Authentication](docs/authentication.md) — magic-link flow, cookies, CORS, limits
+- [API authentication](docs/api-authentication.md) — API-key format, hashing, revocation
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction

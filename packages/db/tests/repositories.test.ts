@@ -23,6 +23,8 @@ function executorReturning(rows: unknown[]): DatabaseExecutor {
   const builder = {
     from: () => builder,
     where: () => builder,
+    // `listAll` now orders by last-seen, so the fake must accept the call.
+    orderBy: () => builder,
     limit: () => Promise.resolve(rows),
     then: (resolve: (value: unknown) => unknown) => Promise.resolve(rows).then(resolve),
   };

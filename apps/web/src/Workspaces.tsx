@@ -1,7 +1,9 @@
 import type { WorkspaceSummary } from '@hybrid/contracts';
 import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react';
 
+import { Agents } from './Agents';
 import { createWorkspace, listWorkspaces, openWorkspace } from './api';
+import { ApiKeys } from './ApiKeys';
 
 /**
  * Workspace selection and creation.
@@ -139,13 +141,26 @@ export function Workspaces(): JSX.Element {
       )}
 
       {selected !== null && (
-        <div className="rounded-md border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
-          <p className="text-slate-200">
-            Authorized for <span className="font-medium">{selected.name}</span> as {selected.role}.
-          </p>
-          <p className="mt-1 text-slate-500">
-            Agents, events and policy arrive in later steps.
-          </p>
+        <div className="space-y-5">
+          <div className="rounded-md border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
+            <p className="text-slate-200">
+              Authorized for <span className="font-medium">{selected.name}</span> as{' '}
+              {selected.role}.
+            </p>
+            <p className="mt-1 text-slate-500">Agents, events and policy arrive in later steps.</p>
+          </div>
+
+          <div className="border-t border-slate-800 pt-5">
+            <Agents key={`agents-${selected.id}`} workspaceId={selected.id} />
+          </div>
+
+          <div className="border-t border-slate-800 pt-5">
+            <ApiKeys
+              key={`keys-${selected.id}`}
+              workspaceId={selected.id}
+              canManage={selected.role === 'operator'}
+            />
+          </div>
         </div>
       )}
 

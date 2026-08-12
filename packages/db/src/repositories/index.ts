@@ -24,6 +24,17 @@
  */
 
 export { createAgentRepository, agentQueries, agentScopePredicate } from './agents.js';
+
+export {
+  apiCredentialScopePredicate,
+  createApiCredentialRepository,
+} from './api-credentials.js';
+export type {
+  ApiCredentialRepository,
+  ApiCredentialRow,
+  ApiCredentialSummary,
+  IssueApiCredentialInput,
+} from './api-credentials.js';
 export type { AgentRepository, AgentRow } from './agents.js';
 
 export { createEventRepository, eventQueries, eventScopePredicate } from './events.js';

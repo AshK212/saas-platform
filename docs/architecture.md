@@ -133,6 +133,31 @@ Every tenant-owned table carries a `NOT NULL workspace_id`. Step 4 will add the
 repository layer that scopes every query by it. The schema does not depend on
 that layer being correct.
 
+### Two authentication domains (Step 7)
+
+```text
+OPERATOR (browser)                    AGENT (machine)
+Session cookie                        Authorization: Bearer <key>
+   -> AuthenticatedUser                  -> credential row
+   -> membership (SQL)                   -> credential.workspace_id
+   -> AuthorizedWorkspace                -> WorkspaceScope
+   -> WorkspaceScope
+```
+
+They are never interchangeable: a bearer key cannot manage credentials or reach
+`/v1/auth/me`, and a session cookie cannot authenticate an agent request. Both
+directions are asserted by tests.
+
+> **The caller never selects the workspace for an API-key-authenticated
+> request.** It comes from `api_credentials.workspace_id` on the matched row. A
+> `workspace_id` in a body, query string, header or path is ignored.
+
+> **API-key callers may never mutate policy.** Policy changes happen only
+> through authenticated operator flows. The same prohibition applies to share
+> links and the public demo.
+
+Details: [api-authentication.md](api-authentication.md).
+
 ### Operator authorization chain (Step 6)
 
 ```text

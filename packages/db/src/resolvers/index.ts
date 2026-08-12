@@ -17,6 +17,9 @@
  * `../repositories/` behind a scope.
  */
 
+export { authenticateApiCredential } from './api-credentials.js';
+export type { AuthenticatedApiCredential } from './api-credentials.js';
+
 export { authorizeWorkspaceForUser, listWorkspacesForUser } from './authorization.js';
 export type {
   AuthorizedWorkspace,
