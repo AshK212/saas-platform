@@ -8,20 +8,36 @@
  *
  * LAYOUT
  * ------
- *   src/client.ts     - pool + typed Drizzle client (the only driver construction site)
- *   src/readiness.ts  - schema-independent `SELECT 1` readiness probe
- *   src/redact.ts     - credential redaction for diagnostics
- *   src/migrate.ts    - migration runner CLI (runtime dependencies only)
- *   src/schema/       - Drizzle table definitions (empty until Step 3)
- *   migrations/       - generated SQL migrations, checked into Git
- *   drizzle.config.ts - drizzle-kit configuration
+ *   src/client.ts       - pool + typed Drizzle client (the only driver construction site)
+ *   src/readiness.ts    - schema-independent `SELECT 1` readiness probe
+ *   src/redact.ts       - credential redaction for diagnostics
+ *   src/migrate.ts      - migration runner CLI (runtime dependencies only)
+ *   src/schema/         - Drizzle table definitions
+ *   src/repositories/   - workspace-SCOPED data access (every method needs a scope)
+ *   src/resolvers/      - READ-ONLY; establish which workspace a caller may enter
+ *   src/provisioning/   - tenant creation; the only writes outside identity/
+ *   src/identity/       - global, user-owned records (users, auth)
+ *   migrations/         - generated SQL migrations, checked into Git
  *
- * STEP 2 SCOPE
+ * TENANT ISOLATION
+ * ----------------
+ * Tenant-owned data is reachable only through `repositories/`, and every method
+ * there is bound to exactly one `WorkspaceScope`. See
+ * docs/adr/0001-workspace-isolation.md.
+ *
+ * Raw schema tables are NOT re-exported from this entry point. They are
+ * available at `@hybrid/db/schema` for migrations and database tooling only;
+ * ESLint forbids application code from importing that path, because
+ * `db.select().from(events)` with no workspace predicate is exactly the
+ * cross-tenant leak this package exists to prevent.
+ *
+ * STEP 4 SCOPE
  * ------------
- * Infrastructure only. No domain tables, no repositories, no tenant-scoped
- * queries. Those begin in Step 3, once a schema exists.
+ * Data-access isolation architecture. Reads only, and only enough to prove the
+ * pattern. No authentication, no ingest, no policy, no ledger, no enforcement.
  */
 
+// Connection and lifecycle
 export {
   closeDatabasePool,
   createDatabaseClient,
@@ -30,6 +46,7 @@ export {
 } from './client.js';
 export type { DatabaseClient, DatabasePool, DatabasePoolOptions } from './client.js';
 
+// Operational
 export { checkDatabaseReadiness } from './readiness.js';
 export type {
   DatabaseReadinessOptions,
@@ -37,7 +54,89 @@ export type {
   DatabaseReadinessStatus,
   ReadinessQueryable,
 } from './readiness.js';
-
 export { describeConnectionTarget, redactConnectionStrings } from './redact.js';
 
-export * as schema from './schema/index.js';
+// Tenant-scoped data access
+/**
+ * NOTE: `createWorkspaceScope` is deliberately NOT exported.
+ *
+ * It is the raw structural constructor and performs no authorization. Exposing
+ * it would let an HTTP handler write `createWorkspaceScope(req.params.id)` and
+ * mint tenant access straight from request input, defeating ADR 0001 and
+ * ADR 0003. Application code obtains a scope only from
+ * `authorizeWorkspaceForUser`, which requires a proven membership.
+ *
+ * The `WorkspaceScope` TYPE is still exported, so callers can name the value
+ * they receive without being able to fabricate one.
+ */
+export {
+  agentQueries,
+  agentScopePredicate,
+  createAgentRepository,
+  createEventRepository,
+  createRuntimeProfileRepository,
+  eventQueries,
+  eventScopePredicate,
+  isSameWorkspace,
+  runtimeProfileQueries,
+  runtimeProfileScopePredicate,
+  WorkspaceScopeError,
+} from './repositories/index.js';
+export type {
+  AgentRepository,
+  AgentRow,
+  DatabaseExecutor,
+  DatabaseTransaction,
+  EventRepository,
+  EventRow,
+  RuntimeProfileRepository,
+  RuntimeProfileRow,
+  WorkspaceScope,
+} from './repositories/index.js';
+
+// Global identity (users, magic links, auth sessions - no workspace involved)
+export {
+  consumeMagicLink,
+  findActiveAuthSession,
+  findLatestMagicLinkIssuedAt,
+  findOrCreateUserByEmail,
+  findUserByEmail,
+  findUserById,
+  insertAuthSession,
+  insertMagicLink,
+  normaliseEmail,
+  revokeAuthSession,
+  touchAuthSession,
+} from './identity/index.js';
+export type {
+  ActiveAuthSession,
+  AuthSessionRow,
+  ConsumedMagicLink,
+  CreateAuthSessionInput,
+  IssueMagicLinkInput,
+  MagicLinkRow,
+  UserRow,
+} from './identity/index.js';
+
+// Scope resolvers (deliberately not workspace-scoped - they establish scope).
+// `authorizeWorkspaceForUser` is the ONLY sanctioned way for application code
+// to obtain a WorkspaceScope; see resolvers/authorization.ts.
+export {
+  authorizeWorkspaceForUser,
+  findDemoWorkspaceBySlug,
+  findMembership,
+  findWorkspaceById,
+  listMembershipsForUser,
+  listWorkspacesForUser,
+} from './resolvers/index.js';
+export type {
+  AuthorizedWorkspace,
+  AuthorizedWorkspaceSummary,
+  MembershipRole,
+  MembershipRow,
+  WorkspaceRow,
+} from './resolvers/index.js';
+
+// Tenant provisioning (the only writes outside identity/)
+export { createWorkspaceWithOperator } from './provisioning/index.js';
+export type { CreateWorkspaceInput } from './provisioning/index.js';

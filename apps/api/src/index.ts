@@ -3,12 +3,19 @@ import { loadServerConfig, type ServerConfig } from '@hybrid/config/server';
 import {
   checkDatabaseReadiness,
   closeDatabasePool,
+  createDatabaseClient,
   createDatabasePool,
   describeConnectionTarget,
   type DatabasePool,
 } from '@hybrid/db';
+import { AUTH_CALLBACK_PATH } from '@hybrid/contracts';
 
 import { createApp } from './app.js';
+import { systemClock } from './auth/clock.js';
+import { createResendEmailSender } from './auth/email.js';
+import { createAuthService, type AuthService } from './auth/service.js';
+import { createDrizzleAuthStore } from './auth/store.js';
+import { createDrizzleWorkspaceStore } from './workspaces/store.js';
 import { type DatabaseReadinessProbe } from './routes/ready.js';
 
 /**
@@ -44,9 +51,54 @@ function createPoolIfConfigured(config: ServerConfig): DatabasePool | undefined 
   });
 }
 
+/**
+ * Wires authentication when its prerequisites exist.
+ *
+ * Auth needs a database, an application origin and a verified sender. If any is
+ * missing the service is simply absent and the auth routes answer 503 - the
+ * process still starts and `/healthz` still returns 200, because liveness must
+ * never depend on a feature's configuration.
+ *
+ * The production Resend adapter is the ONLY sender constructed here. The
+ * capturing test sender is never reachable from this path, so a magic-link
+ * token cannot be diverted into logs in a deployed environment.
+ */
+function createAuthServiceIfConfigured(
+  config: ServerConfig,
+  pool: DatabasePool | undefined,
+): AuthService | undefined {
+  const missing: string[] = [];
+  if (pool === undefined) missing.push('DATABASE_URL');
+  if (config.appUrl === undefined) missing.push('APP_URL');
+  if (config.resendApiKey === undefined) missing.push('RESEND_API_KEY');
+  if (config.authFromEmail === undefined) missing.push('AUTH_FROM_EMAIL');
+
+  if (pool === undefined || config.appUrl === undefined) {
+    console.warn(`[api] authentication disabled; missing: ${missing.join(', ')}`);
+    return undefined;
+  }
+  if (config.resendApiKey === undefined || config.authFromEmail === undefined) {
+    console.warn(`[api] authentication disabled; missing: ${missing.join(', ')}`);
+    return undefined;
+  }
+
+  return createAuthService({
+    store: createDrizzleAuthStore(createDatabaseClient(pool)),
+    // Never log the key; it is passed straight into the Authorization header.
+    mailer: createResendEmailSender({
+      apiKey: config.resendApiKey,
+      from: config.authFromEmail,
+    }),
+    clock: systemClock,
+    appUrl: config.appUrl,
+    callbackPath: AUTH_CALLBACK_PATH,
+  });
+}
+
 function main(): void {
   const config = loadServerConfig();
   const pool = createPoolIfConfigured(config);
+  const authService = createAuthServiceIfConfigured(config, pool);
 
   const probeDatabase: DatabaseReadinessProbe = async () => {
     const result = await checkDatabaseReadiness(pool);
@@ -57,7 +109,15 @@ function main(): void {
     return result.status;
   };
 
-  const app = createApp({ probeDatabase });
+  const app = createApp({
+    probeDatabase,
+    authService,
+    appUrl: config.appUrl,
+    secureCookies: config.isProduction,
+    webOrigin: config.webOrigin,
+    workspaceStore:
+      pool === undefined ? undefined : createDrizzleWorkspaceStore(createDatabaseClient(pool)),
+  });
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
     console.log(`[api] listening on http://${config.host}:${String(info.port)} (${config.nodeEnv})`);

@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 
+import type { AuthService } from './auth/service.js';
+import { createAuthRoutes } from './routes/auth.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createReadinessRoutes, type DatabaseReadinessProbe } from './routes/ready.js';
+import { createWorkspaceRoutes } from './routes/workspaces.js';
+import { buildAllowedOrigins, originGuard } from './security/origin.js';
+import type { WorkspaceStore } from './workspaces/store.js';
 
 /**
  * Everything the application needs from the outside world.
@@ -12,28 +18,103 @@ import { createReadinessRoutes, type DatabaseReadinessProbe } from './routes/rea
 export interface AppDependencies {
   /** Reports database readiness. Must resolve; failures are reported, not thrown. */
   readonly probeDatabase: DatabaseReadinessProbe;
+
+  /**
+   * Authentication service. `undefined` when the database is not configured -
+   * auth routes then answer 503 while liveness stays unaffected.
+   */
+  readonly authService?: AuthService | undefined;
+
+  /** Absolute browser-app origin, used for the post-callback redirect. */
+  readonly appUrl?: string | undefined;
+
+  /** True in production; drives the cookie Secure attribute. */
+  readonly secureCookies?: boolean;
+
+  /**
+   * Explicit cross-origin allowlist for the browser app.
+   *
+   * Left undefined in the preferred same-site deployment, where the web app and
+   * API share an origin and no CORS is involved at all. When set, exactly one
+   * origin is allowed with credentials - never a wildcard, which browsers
+   * reject alongside credentials anyway.
+   */
+  readonly webOrigin?: string | undefined;
+
+  /**
+   * Workspace persistence. `undefined` when the database is unconfigured -
+   * those routes then answer 503 while liveness stays unaffected.
+   */
+  readonly workspaceStore?: WorkspaceStore | undefined;
 }
 
 /**
  * Composes the control-plane API.
  *
- * Route groups are mounted here and implemented in `src/routes/*`. This keeps
- * the server entry point free of routing detail and lets later steps add
- * governance surfaces without growing a single large file.
- *
- * STEP 2 SCOPE
+ * STEP 6 SCOPE
  * ------------
- * Liveness and readiness only. Authentication, workspaces, API keys, agents,
- * events, policies, prechecks, ledger, receipts, sharing and demo surfaces are
- * intentionally absent and belong to later steps.
+ * Liveness, readiness, authentication, and workspace membership authorization.
+ * API keys, agents, events, policies, prechecks, ledger, receipts, sharing and
+ * demo surfaces are intentionally absent.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
+
+  /**
+   * Uniform failure response.
+   *
+   * Hono's default handler returns the raw error text, which for a database
+   * failure can carry SQL, table names or a connection target. Every unhandled
+   * error therefore collapses to one opaque JSON body. The error itself is
+   * deliberately not logged here - structured logging arrives with the
+   * observability step, and an ad-hoc `console.error(error)` would be exactly
+   * the sort of thing that leaks a query containing tenant data.
+   */
+  app.onError((_error, c) => c.json({ error: 'internal_error' }, 500));
+
+  // Same-site deployment needs no CORS; this activates only when an explicit
+  // browser origin is configured.
+  if (dependencies.webOrigin !== undefined) {
+    app.use(
+      '/v1/*',
+      cors({
+        origin: dependencies.webOrigin,
+        credentials: true,
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        allowHeaders: ['content-type'],
+      }),
+    );
+  }
+
+  // CSRF: reject cross-origin state-changing requests before any handler runs.
+  // Mounted on /v1/* only - /healthz and /readyz are safe GETs and must stay
+  // reachable by uptime probes that send no Origin.
+  app.use(
+    '/v1/*',
+    originGuard({
+      allowedOrigins: buildAllowedOrigins(dependencies.appUrl, dependencies.webOrigin),
+    }),
+  );
 
   // Liveness is mounted with no dependencies at all - that independence is the
   // point of the endpoint, and is asserted by tests.
   app.route('/', createHealthRoutes());
   app.route('/', createReadinessRoutes(dependencies.probeDatabase));
+  app.route(
+    '/',
+    createAuthRoutes({
+      service: dependencies.authService,
+      appUrl: dependencies.appUrl,
+      secureCookies: dependencies.secureCookies ?? false,
+    }),
+  );
+  app.route(
+    '/',
+    createWorkspaceRoutes({
+      store: dependencies.workspaceStore,
+      authService: dependencies.authService,
+    }),
+  );
 
   return app;
 }

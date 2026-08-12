@@ -1,41 +1,161 @@
-import { CONTRACTS_VERSION, PLATFORM_NAME } from '@hybrid/contracts';
-import type { JSX } from 'react';
+import {
+  AUTH_CALLBACK_RESULT_PARAM,
+  authCallbackResultSchema,
+  CONTRACTS_VERSION,
+  PLATFORM_NAME,
+  type CurrentUserResponse,
+} from '@hybrid/contracts';
+import { useCallback, useEffect, useState, type JSX } from 'react';
+
+import { fetchCurrentUser, logout } from './api';
+import { SignIn } from './SignIn';
+import { Workspaces } from './Workspaces';
 
 /**
  * Application shell.
  *
- * STEP 1 SCOPE
+ * STEP 5 SCOPE
  * ------------
- * This exists to prove the frontend toolchain (React + Vite + Tailwind +
- * workspace package resolution) compiles and builds. It deliberately contains
- * no dashboard, no fleet data, no policy UI, no charts and no authentication.
- * Those arrive in their own steps.
+ * Enough UI to prove the authentication flow end to end: request a link, land
+ * back from the callback, see the signed-in identity, sign out.
+ *
+ * There is deliberately no dashboard, no workspace picker, no fleet data, no
+ * policy UI and no charts. Being signed in grants access to no workspace -
+ * workspace selection is Step 6.
  */
+
+type AuthState =
+  | { status: 'loading' }
+  | { status: 'signed-out' }
+  | { status: 'signed-in'; user: CurrentUserResponse['user'] };
+
+/**
+ * Reads and then strips the callback outcome from the address bar.
+ *
+ * The API already redirected to a token-free URL; this additionally removes the
+ * outcome marker via `replaceState`, so a refresh or a shared URL carries no
+ * authentication artefacts at all.
+ */
+function readCallbackResult(): 'success' | 'invalid_link' | null {
+  const raw = new URLSearchParams(window.location.search).get(AUTH_CALLBACK_RESULT_PARAM);
+  if (raw === null) {
+    return null;
+  }
+  const parsed = authCallbackResultSchema.safeParse(raw);
+  // An unrecognised value is treated as a failure rather than ignored.
+  return parsed.success ? parsed.data : 'invalid_link';
+}
+
+function useCallbackResult(): 'success' | 'invalid_link' | null {
+  // Read once during initialisation. Deriving it in an effect would set state
+  // during the first commit and trigger a cascading render.
+  const [result] = useState(readCallbackResult);
+
+  useEffect(() => {
+    // The effect only updates an external system (the address bar), never state.
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has(AUTH_CALLBACK_RESULT_PARAM)) {
+      return;
+    }
+    params.delete(AUTH_CALLBACK_RESULT_PARAM);
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query === '' ? '' : `?${query}`}`,
+    );
+  }, []);
+
+  return result;
+}
+
 export function App(): JSX.Element {
+  const [auth, setAuth] = useState<AuthState>({ status: 'loading' });
+  const callbackResult = useCallbackResult();
+
+  const refresh = useCallback(async () => {
+    const user = await fetchCurrentUser();
+    setAuth(user === null ? { status: 'signed-out' } : { status: 'signed-in', user });
+  }, []);
+
+  useEffect(() => {
+    // State is set only after the await resolves, and only if this component is
+    // still mounted - so no synchronous set during the effect, and no update
+    // against an unmounted tree.
+    let cancelled = false;
+
+    void (async () => {
+      const user = await fetchCurrentUser();
+      if (!cancelled) {
+        setAuth(user === null ? { status: 'signed-out' } : { status: 'signed-in', user });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onSignOut(): Promise<void> {
+    await logout();
+    await refresh();
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-6 px-6 py-16">
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
-          Credit Phase &middot; Step 1 Foundation
-        </p>
+      <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6 py-16">
+        <header className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
+            Credit Phase &middot; Step 6 Workspace Authorization
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight">{PLATFORM_NAME}</h1>
+        </header>
 
-        <h1 className="text-4xl font-semibold tracking-tight">{PLATFORM_NAME}</h1>
+        {callbackResult === 'invalid_link' && (
+          <p role="alert" className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+            That sign-in link is no longer valid. Links can be used once and expire after 15
+            minutes. Request a new one below.
+          </p>
+        )}
 
-        <p className="max-w-prose text-slate-300">
-          Control-plane foundation. The toolchain, workspace boundaries and build path are in
-          place; product functionality is intentionally not implemented yet.
-        </p>
+        <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-6">
+          {auth.status === 'loading' && <p className="text-sm text-slate-400">Loading…</p>}
 
-        <dl className="grid gap-3 border-t border-slate-800 pt-6 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-slate-400">Shared contracts</dt>
-            <dd className="font-mono text-slate-200">v{CONTRACTS_VERSION}</dd>
-          </div>
-          <div>
-            <dt className="text-slate-400">API liveness</dt>
-            <dd className="font-mono text-slate-200">GET /healthz</dd>
-          </div>
-        </dl>
+          {auth.status === 'signed-out' && <SignIn />}
+
+          {auth.status === 'signed-in' && (
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <h2 className="text-lg font-medium">Signed in</h2>
+                <p className="font-mono text-sm text-slate-300">{auth.user.email}</p>
+              </div>
+              <p className="max-w-prose text-sm text-slate-400">
+                Being signed in authorizes no workspace on its own. Every workspace action below
+                is re-checked against your membership by the server.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void onSignOut();
+                }}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+        </section>
+
+        {auth.status === 'signed-in' && (
+          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-6">
+            <Workspaces />
+          </section>
+        )}
+
+        <footer className="border-t border-slate-800 pt-6 text-sm text-slate-500">
+          Contracts v{CONTRACTS_VERSION} &middot; business features are intentionally not
+          implemented yet.
+        </footer>
       </div>
     </main>
   );

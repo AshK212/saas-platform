@@ -176,12 +176,109 @@ redacted connection target.
 
 ### Current state
 
-`pnpm db:generate` runs successfully and reports `0 tables` /
-`No schema changes, nothing to migrate`. It has therefore produced
-`migrations/meta/_journal.json` (an empty, valid journal) and **no SQL
-migration** — because there is no schema to migrate yet.
+The first real migration is checked in:
 
-No fake or placeholder domain table was created to manufacture a migration
-artifact. The migration mechanism is proven — config loads, schema is read, the
-journal is initialised, `db:check` passes — and the first real migration will be
-generated in Step 3.
+```text
+migrations/0000_dusty_skullbuster.sql   15 tables, 8 enums
+migrations/meta/0000_snapshot.json
+migrations/meta/_journal.json           1 entry
+```
+
+`pnpm db:generate` and `pnpm db:check` both pass offline. **The migration has
+never been applied to a database** — no Neon project exists. See
+[client-delivery-status.md](client-delivery-status.md).
+
+---
+
+## Core schema (Step 3)
+
+15 tables, 8 enum types. Structure and invariants only: no repository, query
+helper, ingest path or enforcement rule exists.
+
+| Table | Owner | Purpose |
+| --- | --- | --- |
+| `users` | global | Identity for later magic-link sign-in. No password column. |
+| `workspaces` | — | The tenant boundary. Carries `demo_enabled` + optional public `demo_slug`. |
+| `workspace_memberships` | workspace | Many-to-many user↔workspace. PK `(workspace_id, user_id)`. |
+| `api_credentials` | workspace | Show-once API keys. Stores `key_prefix` + `secret_hash` only. |
+| `share_tokens` | workspace | Revocable read-only shares. Stores `token_prefix` + `token_hash` only. |
+| `runtime_profiles` | workspace | Vendor-neutral runtime reference. `adapter_key` is free text. |
+| `agents` | workspace | `UNIQUE (workspace_id, external_id)`; `last_seen_at` drives AC-04. |
+| `sessions` | workspace | Runtime session skeleton. |
+| `tasks` | workspace | Runtime work-item skeleton. |
+| `workspace_policy_state` | workspace | Monotonic policy `version` counter. |
+| `agent_policies` | workspace | Mode + daily spend/publish caps. PK `(workspace_id, agent_id)`. |
+| `ledger_daily` | workspace | Authoritative committed totals. PK `(workspace_id, agent_id, day)`. |
+| `precheck_receipts` | workspace | Immutable decision evidence. |
+| `blocks` | workspace | Durable denials, plane- or runtime-sourced. |
+| `events` | workspace | Audit stream. `UNIQUE (workspace_id, event_id)`. |
+
+### Identifiers
+
+UUID primary keys with a database-side `gen_random_uuid()` default. That
+function is **core PostgreSQL from v13**, so no `pgcrypto` or `uuid-ossp`
+extension is required — the migration contains no `CREATE EXTENSION`, which
+matters because extension availability varies by managed provider.
+
+No sequential/serial identifiers are used anywhere: a guessable public id leaks
+row counts and invites enumeration.
+
+### Composite foreign keys
+
+Thirteen tenant-owned references are composite and workspace-anchored:
+
+| Child | Column | Parent |
+| --- | --- | --- |
+| `agents` | `runtime_profile_id` | `runtime_profiles` |
+| `sessions` | `agent_id`, `runtime_profile_id` | `agents`, `runtime_profiles` |
+| `tasks` | `session_id`, `agent_id` | `sessions`, `agents` |
+| `agent_policies` | `agent_id` | `agents` |
+| `ledger_daily` | `agent_id` | `agents` |
+| `precheck_receipts` | `agent_id` | `agents` |
+| `blocks` | `agent_id`, `precheck_receipt_id` | `agents`, `precheck_receipts` |
+| `events` | `agent_id`, `precheck_receipt_id`, `block_id` | `agents`, `precheck_receipts`, `blocks` |
+
+Nullable references (`runtime_profile_id`, `precheck_receipt_id`, `block_id`)
+rely on PostgreSQL's default `MATCH SIMPLE`: when the nullable half is NULL the
+constraint is not checked, which is the intended "not linked" state.
+
+### The receipt ↔ block link
+
+Modelled once, as `blocks.precheck_receipt_id`. A mutual foreign key would be
+circular — unresolvable at insert time without deferred constraints, and a real
+TypeScript import cycle. More importantly, storing `block_id` on the receipt
+would require updating the receipt after the block is written, breaking the
+immutability that makes it trustworthy evidence.
+
+Both directions stay queryable, and the partial index
+`blocks_workspace_precheck_receipt_idx` makes the reverse lookup efficient.
+
+### Indexes
+
+Each has a named Credit query pattern; nothing speculative:
+
+| Index | Serves |
+| --- | --- |
+| `agents_workspace_last_seen_idx` | AC-04 agent roster by liveness |
+| `events_workspace_received_idx` | AC-05 workspace timeline |
+| `events_workspace_agent_received_idx` | AC-05 agent filter |
+| `precheck_receipts_workspace_agent_created_idx` | receipt history |
+| `blocks_workspace_created_idx` | AC-19 recent blocks |
+| `blocks_workspace_precheck_receipt_idx` (partial) | receipt → block lookup |
+| `share_tokens_workspace_active_idx` (partial) | active shares only |
+| `api_credentials_workspace_idx` | credential listing |
+| `sessions_workspace_agent_idx`, `tasks_workspace_session_idx` | runtime lookups |
+| `workspace_memberships_user_idx` | "my workspaces" at sign-in |
+
+Credential and token *lookup* needs no extra index: `key_prefix` and
+`token_prefix` are unique, and a unique constraint is already an index.
+
+### Enum vocabularies
+
+`membership_role`, `agent_mode`, `event_type`, `action_category`,
+`precheck_decision`, `block_source`, `session_status`, `task_status`.
+
+Event **payloads** are open `jsonb` with no shape constraint, so
+forward-compatible events remain possible. Only the routing vocabularies are
+closed. Extending one requires `ALTER TYPE … ADD VALUE`, which must be its own
+migration since it cannot be used in the transaction that adds it.

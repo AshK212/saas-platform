@@ -54,6 +54,45 @@ export default tseslint.config(
     },
   },
 
+  // Tenant-isolation guardrail for application code.
+  //
+  // Tenant-owned data must be reached through @hybrid/db repositories, which
+  // are bound to a WorkspaceScope. Importing the raw schema tables or the query
+  // builder into an app makes `db.select().from(events)` - with no workspace
+  // predicate - a one-line cross-tenant leak. Blocking the import keeps that
+  // shape out of application code entirely.
+  //
+  // packages/db itself is exempt: it is where the scoped queries are written.
+  {
+    files: ['apps/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@hybrid/db/schema',
+              message:
+                'Do not query schema tables directly from an application. Use a workspace-scoped repository from @hybrid/db; raw table access bypasses tenant isolation.',
+            },
+            {
+              name: 'drizzle-orm',
+              message:
+                'Application code must not build ad-hoc queries. Add a workspace-scoped repository method in @hybrid/db instead.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['drizzle-orm/*'],
+              message:
+                'Application code must not build ad-hoc queries. Add a workspace-scoped repository method in @hybrid/db instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Server-side and tooling code runs on Node.
   {
     files: [
@@ -86,17 +125,31 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
+          // Flat-config rules replace rather than merge, so this block restates
+          // the app-wide tenant-isolation restrictions alongside the
+          // browser-specific ones. The @hybrid/db pattern below is broader than
+          // the app-wide rule and already covers @hybrid/db/schema.
           paths: [
             {
               name: '@hybrid/config/server',
               message:
                 'Server configuration must never be imported into browser code. Use the browser-safe @hybrid/config entry point.',
             },
+            {
+              name: 'drizzle-orm',
+              message:
+                'Application code must not build ad-hoc queries, and the query builder must not reach the browser bundle.',
+            },
           ],
           patterns: [
             {
               group: ['@hybrid/db', '@hybrid/db/*'],
               message: 'The database package is server-only and must not reach the browser bundle.',
+            },
+            {
+              group: ['drizzle-orm/*'],
+              message:
+                'Application code must not build ad-hoc queries, and the query builder must not reach the browser bundle.',
             },
           ],
         },

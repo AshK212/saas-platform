@@ -63,6 +63,11 @@ Every session, task and record is scoped to exactly one workspace. Cross-tenant
 access is a defect, not a configuration option. Automated cross-tenant coverage
 is tracked as AC-20.
 
+As of Step 3 this is enforced **structurally in PostgreSQL**, not only by
+convention: every reference between tenant-owned rows is a composite foreign key
+anchored on `workspace_id`. See [Tenant hierarchy](#tenant-hierarchy) below and
+[database.md](database.md) for the full constraint matrix.
+
 ### Hermes / OpenClaw
 
 Future Hermes and OpenClaw adapters are **not Credit functionality**. They are
@@ -93,6 +98,187 @@ packages/
 The database foundation — driver choice, transaction guarantees, migration
 workflow and the liveness/readiness split — is documented separately in
 [database.md](database.md).
+
+---
+
+## Tenant hierarchy
+
+```text
+User (global identity, no workspace_id)
+  |
+  +-- WorkspaceMembership --> Workspace  (the tenant boundary)
+                                |
+                                +-- ApiCredential      (hash + prefix only)
+                                +-- ShareToken         (hash + prefix only)
+                                +-- RuntimeProfile
+                                |     |
+                                +-- Agent  --------------+
+                                |     |                  |
+                                |     +-- Session -- Task|
+                                |     +-- AgentPolicy    |
+                                |     +-- LedgerDaily    |  (workspace, agent, UTC day)
+                                |     +-- PrecheckReceipt|
+                                |     +-- Block ---------+  (-> PrecheckReceipt)
+                                |
+                                +-- WorkspacePolicyState  (version counter)
+                                +-- Event  (-> Agent, PrecheckReceipt, Block)
+```
+
+Users are the only global entity: one human, one identity, many workspaces.
+Tenant scoping is a property of membership, never of the user record.
+
+### Workspace scoping
+
+Every tenant-owned table carries a `NOT NULL workspace_id`. Step 4 will add the
+repository layer that scopes every query by it. The schema does not depend on
+that layer being correct.
+
+### Operator authorization chain (Step 6)
+
+```text
+Auth Session
+    |
+    v
+AuthenticatedUser          identity only - no workspace, role or permission
+    |
+    v
+Membership Authorization   authorizeWorkspaceForUser(executor, userId, workspaceId)
+    |                      membership proven by SQL join on every request
+    v
+AuthorizedWorkspace        safe metadata + role + trusted scope
+    |
+    v
+WorkspaceScope
+    |
+    v
+Tenant Repository
+```
+
+Two rules govern this chain:
+
+> **`workspace_id` from a request is NOT authorization.**
+> It is a lookup argument. The membership row is the authorization.
+
+> **Membership must be validated at every workspace authorization boundary.**
+> There is no cached grant, no session-bound workspace and no server-side
+> "current workspace". A user may belong to many workspaces, and each is
+> authorized independently, on every call.
+
+`createWorkspaceScope` is deliberately **not exported** from `@hybrid/db`, so an
+HTTP handler cannot mint a scope from request input. The only way to obtain one
+is `authorizeWorkspaceForUser`, which requires a membership row to exist. A test
+fails if any file under `apps/` so much as calls the raw constructor.
+
+A workspace the caller cannot reach returns **404, never 403** — a 403 would
+confirm the workspace exists and turn the endpoint into an enumeration oracle.
+
+Full reasoning: [ADR 0003 — Operator Workspace Authorization](adr/0003-operator-workspace-authorization.md).
+
+### Application-layer scoping (Step 4)
+
+Tenant-owned data is reachable only through workspace-bound repositories:
+
+```text
+Trusted auth / resolver
+        |
+        v
+WorkspaceScope            (branded; workspaceId only)
+        |
+        v
+Workspace-bound Repository
+        |
+        v
+Drizzle / PostgreSQL
+        |
+        +--> WHERE workspace_id = scope.workspaceId
+        |
+        +--> composite workspace foreign keys
+```
+
+- **Explicit scope.** Every repository factory takes `(executor, scope)`; no
+  method accepts a workspace id, so no caller can re-target another tenant.
+- **No ambient scope.** No global, no singleton, no environment variable, and
+  AsyncLocalStorage is not used as an enforcement mechanism. Scope is an
+  argument, so it is visible in review and safe under concurrency.
+- **A UUID is not authorization.** Ids leak through logs, URLs and support
+  tickets. Every lookup is workspace-qualified even when the id is globally
+  unique.
+- **Wrong workspace is "not found".** A row in another workspace returns `null`,
+  identical to a row that does not exist. No `EXISTS_IN_ANOTHER_WORKSPACE`
+  signal is ever produced.
+- **Transaction-compatible.** Repositories accept a pooled client or a
+  transaction handle, so the ledger step can run scoped reads inside the same
+  transaction that locks the ledger row.
+- **Resolvers are the only unscoped reads.** They establish scope and are each
+  bounded by an authenticated `user_id` or by `demo_enabled = true`.
+
+Full reasoning, alternatives and risks:
+[ADR 0001 — Workspace Isolation](adr/0001-workspace-isolation.md).
+
+### Composite foreign-key defence
+
+Where a tenant-owned row references another, the foreign key is composite:
+
+```text
+child(workspace_id, parent_id)  ->  parent(workspace_id, id)
+```
+
+Each parent therefore carries a `UNIQUE (workspace_id, id)` constraint purely to
+serve as that target. The effect is that an event in workspace A referencing an
+agent in workspace B is **rejected by PostgreSQL**, not merely avoided by
+application code.
+
+**These constraints do not replace query scoping.** A foreign key constrains
+*relationships*; it does nothing whatsoever to:
+
+```sql
+SELECT * FROM events;
+```
+
+which happily returns every tenant's rows. The two layers address different
+failure modes and both are mandatory:
+
+| Layer | Prevents | Does not prevent |
+| --- | --- | --- |
+| Composite foreign keys | invalid cross-workspace *relationships* | unscoped reads |
+| Repository scoping | unscoped *reads and writes* | a malformed relationship written with a valid-looking pair |
+
+Concluding that either one makes the other unnecessary is the most likely way
+this architecture would be eroded.
+
+### Audit record preservation
+
+Events, precheck receipts, blocks and ledger rows are audit-critical. Every
+foreign key from them uses `ON DELETE RESTRICT`, so history cannot vanish
+because an agent or membership changed. Cascading deletes exist only on three
+pure link/config tables (`workspace_memberships`, `workspace_policy_state`,
+`agent_policies`). Credentials and share tokens are revoked with a timestamp
+rather than deleted.
+
+### UTC ledger day
+
+The ledger is keyed by `(workspace_id, agent_id, day)` where `day` is a
+PostgreSQL `date` representing the **UTC** accounting day. Local-time daily
+boundaries are never stored, and the column is mapped as a string so a
+JavaScript `Date` cannot shift it into the server's local zone.
+
+### Decimal money representation
+
+All USD values are `numeric(14, 6)` — fixed precision, never floating point,
+surfaced to JavaScript as a string. Scale 6 keeps micro-dollar per-call AI costs
+from being rounded away.
+
+### Immutable historical receipts
+
+A precheck receipt must explain its own decision forever. It therefore snapshots
+the policy version, the *applied* mode and caps, the ledger state read at
+decision time, and the remaining headroom. Explaining an old decision never
+requires reading today's mutable policy. Receipts are insert-only, which is why
+the receipt↔block foreign key is modelled once, on the block.
+
+> Tables existing does not mean features exist. No repository, query, ingest
+> path or enforcement rule is implemented — see
+> [acceptance-traceability.md](acceptance-traceability.md).
 
 ### Dependency direction
 

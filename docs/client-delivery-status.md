@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 2 — Neon/Drizzle database foundation).
+Last updated: **2026-08-12** (Step 6 — workspace + membership authorization).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -49,6 +49,9 @@ BLOCKED — no client-owned accounts have been supplied.
 
 NEON CONNECTIVITY:
 BLOCKED — client-owned Neon resource / DATABASE_URL not supplied.
+
+RESEND DELIVERY:
+BLOCKED — client-owned Resend credential/domain unavailable.
 ```
 
 No Render account, no Neon project, no Resend account, and no domain have been
@@ -56,14 +59,33 @@ provided. **None have been created under a developer account as a substitute**,
 which would violate the ownership requirement. Nothing has been provisioned and
 no credential exists in this repository.
 
-As of Step 2 this is now the **critical technical blocker**, not merely an
-administrative one. The database foundation is complete and validated
-structurally, but the following can only be confirmed against a real
-client-owned Neon project:
+As of Step 3 this is the **critical technical blocker**, and its cost has grown:
+a complete 15-table schema and a checked-in migration now exist and have
+**never been executed against any PostgreSQL server**. The following can only be
+confirmed against a real client-owned Neon project:
 
 - live connectivity and the `SELECT 1` readiness probe returning `ok`;
-- `pnpm db:migrate` actually applying a migration;
-- the six `*.live.test.ts` transaction/locking tests, currently **skipped**.
+- `pnpm db:migrate` actually applying `0000_dusty_skullbuster.sql`;
+- that every constraint, composite foreign key and check behaves as intended at
+  runtime (statically reviewed and unit-asserted, but never executed);
+- the six Step 2 transaction/locking tests, currently **skipped**;
+- the three Step 4 cross-tenant isolation tests (AC-20), currently **skipped**,
+  which require a separate `TEST_DATABASE_URL` — never the production database;
+- the five Step 5 live authentication tests, currently **skipped**, including
+  the PostgreSQL concurrency race proof that two simultaneous magic-link
+  callbacks cannot both create a session. Single-threaded JavaScript cannot
+  establish that, so it remains genuinely unproven;
+- the six Step 6 live workspace tests, currently **skipped**, including real
+  transaction rollback (a failed creator membership must leave no orphaned
+  workspace) and the membership uniqueness constraint. In-memory fakes cannot
+  prove either.
+
+Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
+demonstrated**: it needs a Neon database, a Resend credential with a verified
+sending domain, and a staging deployment. All three are client-owned and absent.
+
+Structural validation passes. That is **not** production Neon validation and is
+not reported as such.
 
 Local structural validation passes. That is **not** production Neon validation
 and is not reported as such.
@@ -159,5 +181,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | AC-20 live cross-tenant isolation tests | Must NOT be the production database: this suite writes data (always inside a rolled-back transaction). A Neon branch is ideal and cheap. The test suite deliberately refuses to fall back to `DATABASE_URL`. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
-| Resend account | AC-01 magic links (later step) | Not needed for Steps 1–3. |
+| Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

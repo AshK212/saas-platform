@@ -56,6 +56,24 @@ Publish path:   apps/web/dist
 
 A rewrite of `/*` to `/index.html` is configured for client-side routing.
 
+### Authentication and cookie deployment
+
+**Serve the web app and the API under one hostname.** Same-site deployment means
+no CORS, and `SameSite=Lax` session cookies work normally. A split-origin
+deployment would require `SameSite=None; Secure`, which weakens the CSRF
+posture — see [authentication.md](authentication.md).
+
+Required on the API service for sign-in to work:
+
+| Variable | Notes |
+| --- | --- |
+| `APP_URL` | Absolute https origin of the browser app. Builds the emailed link and is the only post-callback redirect destination |
+| `RESEND_API_KEY` | Secret; `sync: false` in the blueprint |
+| `AUTH_FROM_EMAIL` | Must be verified in the client's Resend account |
+| `NODE_ENV=production` | Required for the `Secure` cookie attribute |
+
+HTTPS is mandatory in production: without it the `Secure` cookie is never sent.
+
 ### Environment variables
 
 Environment variables are the **only** channel for configuration and secrets.

@@ -2,10 +2,15 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 2, Neon/Drizzle database foundation.**
-Business functionality is intentionally **not** implemented yet. This repository
-currently proves the toolchain, the workspace boundaries, the build path and the
-database infrastructure. There is no domain schema — that is Step 3.
+**Current phase: Credit — Step 6, workspace + membership authorization.**
+The platform provides the toolchain and build path, the database infrastructure,
+the core relational schema with checked-in migrations, the workspace-scoped
+data-access layer, and passwordless magic-link sign-in.
+
+Business functionality beyond sign-in and workspace selection is intentionally
+**not** implemented yet: no API keys, agents, events, policy, ledger, precheck,
+sharing or demo. **Being signed in grants access to no workspace** — tenant
+access comes only from a membership, re-proven on every request.
 
 ---
 
@@ -103,11 +108,70 @@ curl http://127.0.0.1:3000/readyz    # readiness - runs SELECT 1
 pnpm db:generate   # author a migration from the Drizzle schema (no credential)
 pnpm db:check      # validate the migration journal          (no credential)
 pnpm db:migrate    # apply migrations                        (needs DATABASE_URL)
-pnpm test:db       # live Neon suite; skips without DATABASE_URL
+pnpm test:db       # live suites; skip without credentials
 ```
 
-Neon PostgreSQL via `pg` over TCP, through Drizzle. The schema is empty until
-Step 3, so no SQL migration exists yet.
+Neon PostgreSQL via `pg` over TCP, through Drizzle. 15 tables and one checked-in
+migration (`0000_dusty_skullbuster.sql`). **The migration has never been applied
+to a database** — no Neon project exists yet.
+
+## Authentication
+
+Passwordless magic-link sign-in. Requires `DATABASE_URL`, `APP_URL`,
+`RESEND_API_KEY` and `AUTH_FROM_EMAIL`; without them the auth routes return
+`503` and `/healthz` is unaffected.
+
+```text
+POST /v1/auth/magic-link   { email }   -> 200 { ok: true }   (identical for every valid address)
+GET  /v1/auth/callback?token=...       -> 302, sets HttpOnly session cookie
+GET  /v1/auth/me                       -> 200 { user: { id, email } } | 401
+POST /v1/auth/logout                   -> 200, revokes the session server-side
+```
+
+Tokens are 256-bit and stored only as SHA-256 hashes; magic links are single-use
+and expire in 15 minutes. **Signing in authorizes no workspace** — see
+[docs/authentication.md](docs/authentication.md) and
+[ADR 0002](docs/adr/0002-authentication.md).
+
+## Workspaces
+
+```text
+POST /v1/workspaces        { name }  -> 201 { workspace: { id, name, role } }
+GET  /v1/workspaces                  -> 200 { workspaces: [...] }   only your memberships
+GET  /v1/workspaces/:id              -> 200 { workspace } | 404
+```
+
+All three require authentication. Creation also requires an allowed `Origin`
+(CSRF guard) and makes the creator an `operator` member in the same transaction.
+
+**A workspace id in a request is a lookup argument, not authorization.**
+Membership is re-proven in SQL on every call, so holding another tenant's UUID
+returns `404` — identical to a workspace that does not exist. See
+[ADR 0003](docs/adr/0003-operator-workspace-authorization.md).
+
+### Tenant isolation
+
+Tenant-owned data is reachable only through workspace-scoped repositories:
+
+```ts
+const scope = createWorkspaceScope(workspaceId);   // from a trusted resolver
+const agents = createAgentRepository(db, scope);   // or (tx, scope)
+await agents.findByExternalId('agent-1');          // WHERE workspace_id = ... AND external_id = ...
+```
+
+Raw schema tables are not exported from `@hybrid/db`, and ESLint blocks
+application code from importing `@hybrid/db/schema` or `drizzle-orm`. See
+[ADR 0001](docs/adr/0001-workspace-isolation.md).
+
+### Live database tests
+
+| Variable | Used by | Writes data |
+| --- | --- | --- |
+| `DATABASE_URL` | read-only connectivity + transaction checks | no |
+| `TEST_DATABASE_URL` | cross-tenant isolation + live auth suites | yes — always rolled back |
+
+The isolation suite **never** falls back to `DATABASE_URL`. Point
+`TEST_DATABASE_URL` at a throwaway database or Neon branch, never production.
 
 ## Environment setup
 
@@ -125,6 +189,8 @@ behind that prefix.
 ## Documentation
 
 - [Architecture](docs/architecture.md) — foundation, boundaries and invariants
+- [Authentication](docs/authentication.md) — magic-link flow, cookies, CORS, limits
+- [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
 - [Acceptance traceability](docs/acceptance-traceability.md) — AC-01 … AC-21 status

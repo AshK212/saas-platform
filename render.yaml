@@ -31,6 +31,14 @@ services:
       # sync: false keeps the value out of this file and out of Git.
       - key: DATABASE_URL
         sync: false
+      # Authentication. Absolute https origin of the browser app; also the only
+      # post-callback redirect destination.
+      - key: APP_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AUTH_FROM_EMAIL
+        sync: false
 
   # ---------------------------------------------------------------------------
   # Operator web shell (static)

@@ -47,6 +47,17 @@ function isPostgresUrl(value: string): boolean {
   return (url.protocol === 'postgres:' || url.protocol === 'postgresql:') && url.hostname !== '';
 }
 
+/** Accepts only an absolute http(s) origin, so a magic-link URL cannot be relative. */
+function isHttpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '';
+}
+
 /**
  * An unset variable and one set to the empty string mean the same thing.
  * Render and `.env` files both surface "not configured" as `""`.
@@ -69,6 +80,24 @@ const serverEnvSchema = z.object({
       })
       .optional(),
   ),
+
+  // --- Authentication (Step 5) -------------------------------------------
+  // All optional, for the same reason DATABASE_URL is: liveness must not
+  // depend on a feature's configuration. Each is required at the point of use.
+  APP_URL: z.preprocess(
+    emptyStringToUndefined,
+    z.string().refine(isHttpUrl, { message: 'must be an absolute http(s) URL' }).optional(),
+  ),
+  RESEND_API_KEY: z.preprocess(emptyStringToUndefined, z.string().min(1).optional()),
+  AUTH_FROM_EMAIL: z.preprocess(emptyStringToUndefined, z.email().optional()),
+  /**
+   * Optional cross-origin allowlist for the browser app. Left unset in the
+   * preferred same-site deployment; see docs/authentication.md.
+   */
+  WEB_ORIGIN: z.preprocess(
+    emptyStringToUndefined,
+    z.string().refine(isHttpUrl, { message: 'must be an absolute http(s) origin' }).optional(),
+  ),
 });
 
 export interface ServerConfig {
@@ -82,6 +111,14 @@ export interface ServerConfig {
    * bundle.
    */
   readonly databaseUrl?: string;
+  /** Absolute origin of the browser application. Used to build magic-link URLs. */
+  readonly appUrl?: string;
+  /** Resend API key. SECRET - never log, never return, never send to a browser. */
+  readonly resendApiKey?: string;
+  /** Verified sender address for authentication email. */
+  readonly authFromEmail?: string;
+  /** Explicit cross-origin allowlist for the browser app, when not same-site. */
+  readonly webOrigin?: string;
 }
 
 /** Thrown when the process environment does not satisfy the server schema. */
@@ -121,7 +158,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     throw new ServerConfigError(`Invalid server environment configuration - ${issues}`);
   }
 
-  const { NODE_ENV, PORT, HOST, DATABASE_URL } = parsed.data;
+  const { NODE_ENV, PORT, HOST, DATABASE_URL, APP_URL, RESEND_API_KEY, AUTH_FROM_EMAIL, WEB_ORIGIN } =
+    parsed.data;
   return {
     nodeEnv: NODE_ENV,
     port: PORT,
@@ -130,7 +168,29 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     // Spread-or-omit rather than assigning `undefined`, to satisfy
     // `exactOptionalPropertyTypes` and keep "absent" distinct from "set to undefined".
     ...(DATABASE_URL === undefined ? {} : { databaseUrl: DATABASE_URL }),
+    ...(APP_URL === undefined ? {} : { appUrl: APP_URL }),
+    ...(RESEND_API_KEY === undefined ? {} : { resendApiKey: RESEND_API_KEY }),
+    ...(AUTH_FROM_EMAIL === undefined ? {} : { authFromEmail: AUTH_FROM_EMAIL }),
+    ...(WEB_ORIGIN === undefined ? {} : { webOrigin: WEB_ORIGIN }),
   };
+}
+
+/**
+ * Returns the application origin, or fails loudly.
+ *
+ * Required to build a magic-link URL. There is deliberately no localhost
+ * fallback: silently emailing `http://localhost:5173/...` from production would
+ * produce links nobody can use, and would hide a misconfiguration.
+ *
+ * @throws {ServerConfigError} when APP_URL is not configured.
+ */
+export function requireAppUrl(config: ServerConfig): string {
+  if (config.appUrl === undefined) {
+    throw new ServerConfigError(
+      'APP_URL is required to build authentication links but is not configured. Supply it through the environment.',
+    );
+  }
+  return config.appUrl;
 }
 
 /**
