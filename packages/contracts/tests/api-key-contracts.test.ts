@@ -87,15 +87,47 @@ describe('no per-key permission surface exists', () => {
     }
   });
 
-  it('no policy, precheck or ledger contract has been added yet', () => {
-    // `agents.ts` arrived in Step 8 and `events.ts` in Step 9. These three
-    // belong to later steps and must not appear early.
+  it('no precheck, ledger or receipt contract has been added yet', () => {
+    // `agents.ts` arrived in Step 8, `events.ts` in Step 9, `timeline.ts` in
+    // Step 11 and `policy.ts` in Step 12. These three belong to later steps.
     const files = readdirSync(CONTRACTS_SRC);
 
-    expect(files).not.toContain('policy.ts');
     expect(files).not.toContain('precheck.ts');
     expect(files).not.toContain('ledger.ts');
     expect(files).not.toContain('receipts.ts');
+  });
+
+  it('the policy contract is READ-ONLY - no mutation shape exists', () => {
+    // Step 12 is the polling read path. A contract able to express a mode or
+    // cap change would be the first step toward a runtime editing its own
+    // governance, and Step 13 owns operator mutation.
+    const source = readFileSync(path.join(CONTRACTS_SRC, 'policy.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    for (const forbidden of [
+      'updatePolicy',
+      'setMode',
+      'setCap',
+      'policyUpdateRequest',
+      'RequestSchema',
+    ]) {
+      expect(code, forbidden).not.toContain(forbidden);
+    }
+    // The only request-side schema is the polling query.
+    expect(code).toContain('policyPollQuerySchema');
+  });
+
+  it('the policy contract accepts no tenant authority', () => {
+    const source = readFileSync(path.join(CONTRACTS_SRC, 'policy.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The workspace comes from the credential. There is nothing here for a
+    // caller to point at another tenant.
+    for (const forbidden of ['workspace_id', 'workspaceId', 'tenant_id', 'tenantId']) {
+      expect(code, forbidden).not.toContain(forbidden);
+    }
+    // And the polling query is strict, so an unknown parameter is a 400.
+    expect(code).toContain('z.strictObject');
   });
 
   it('the agent contract carries no policy or credential surface', () => {

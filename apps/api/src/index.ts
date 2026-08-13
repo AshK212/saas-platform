@@ -18,6 +18,7 @@ import { createDrizzleAgentStore } from './agents/store.js';
 import { createDrizzleApiKeyStore } from './api-keys/store.js';
 import { createDrizzleAuthStore } from './auth/store.js';
 import { createDrizzleEventReadStore } from './events/read-store.js';
+import { createDrizzlePolicyStore } from './policy/store.js';
 import { createDrizzleEventIngestStore } from './events/store.js';
 import { createDrizzleWorkspaceStore } from './workspaces/store.js';
 import { type DatabaseReadinessProbe } from './routes/ready.js';
@@ -127,6 +128,7 @@ function main(): void {
     agentStore: db === undefined ? undefined : createDrizzleAgentStore(db),
     eventStore: db === undefined ? undefined : createDrizzleEventIngestStore(db),
     eventReadStore: db === undefined ? undefined : createDrizzleEventReadStore(db),
+    policyStore: db === undefined ? undefined : createDrizzlePolicyStore(db),
   });
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {

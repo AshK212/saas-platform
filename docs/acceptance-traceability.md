@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-12** (Step 11 — event timeline and raw event detail).
+Last updated: **2026-08-12** (Step 12 — policy versioning and agent polling).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -41,12 +41,12 @@ only and does not redefine any criterion.
 | AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
 | AC-05 | Timeline + agent filter | CREDIT — functional | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 implemented both halves.** `GET /v1/workspaces/:id/events` returns the workspace stream newest-first by server `received_at` with `id` as a deterministic tiebreaker, bounded pages (default 50, max 100) and opaque `(received_at, id)` cursor pagination that neither repeats nor skips rows. Per-agent filtering resolves the **external** `agent_id` inside the authorized workspace, so a shared `agent-1` cannot cross tenants; an unknown id returns an empty page rather than revealing existence. Browser-session auth only — an API key is refused. A functional operator UI lists events, filters by agent, and loads more. 66 route tests, 24 cursor tests, 25 compiled-SQL tests. **NOT PASS:** never demonstrated in an authorized environment, and the live PostgreSQL suite that proves real ordering, tiebreak and cursor behaviour is **SKIPPED**. |
 | AC-06 | Raw JSON event detail | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 completed the drill-through.** `GET /v1/workspaces/:id/events/:eventId` returns the event plus `raw` — the validated event object exactly as Step 10 stored it in `events.payload`, nested structure intact. `raw` is the **validated object, not raw HTTP request data**, which is why no credential or header material can appear in it. The UI renders it via `JSON.stringify(raw, null, 2)` in a `<pre>` as a React text child; a payload containing `<script>` displays as text and there is no `dangerouslySetInnerHTML` in the app. A malformed, unknown or foreign event id is uniformly 404. **NOT PASS:** never demonstrated in an authorized environment, and the live test asserting byte-for-byte `jsonb` round-tripping is **SKIPPED**. |
-| AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `NOT STARTED` | None. |
+| AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `NOT STARTED` | Step 12 added the policy READ path only: a `budgeted` mode and a `25.000000` cap would be reported faithfully to a polling agent if one existed. **No cap can be set** — there is no mutation route, no mutation contract and no UI — and **nothing enforces a cap**. Setting is Step 13; enforcement and the ledger are later still. |
 | AC-08 | $41 over-cap denial + block/receipt | CREDIT | `NOT STARTED` | None. |
 | AC-09 | Immediate block email | LATER | `DEFERRED` | Out of Credit phase. |
-| AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `NOT STARTED` | None. |
-| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `NOT STARTED` | None. |
-| AC-12 | Pause next precheck denial + unpause | CREDIT | `NOT STARTED` | None. |
+| AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `NOT STARTED` | Step 12 added the propagation half only: a version bump makes a polling agent pick up a change on its next ~30-second poll, which is what makes 60 seconds achievable. **Nothing can raise a cap** (Step 13) and nothing allows or denies a spend (later). |
+| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `NOT STARTED` | Step 12 reports `daily_publish_cap` faithfully, including the distinction between `0` (nothing permitted) and `null` (uncapped). **No cap can be set and no publish is ever denied.** |
+| AC-12 | Pause next precheck denial + unpause | CREDIT | `NOT STARTED` | Step 12 reports `paused` faithfully. **It enforces nothing** — there is no precheck endpoint, no decision and no kill switch — and there is no way to pause or unpause. |
 | AC-13 | Event replay idempotency | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 10 implemented ingest**, corrected after architecture review. `POST /v1/events` is mounted, bearer-authenticated, workspace derived from the credential row. One transaction per batch; the **duplicate decision precedes every one-time side effect**, serialized by a transaction-scoped `pg_advisory_xact_lock` keyed on `(workspace_id, event_id)` and acquired in deterministic order to avoid deadlock, with the Step 3 index `UNIQUE (workspace_id, event_id)` retained as defense in depth. Replaying a batch returns 200 with `accepted: 0, duplicates: N`; the stored count is unchanged, original rows untouched, `last_seen_at` not refreshed, and a replay carrying changed content creates no alternate block, agent or linkage. 92 in-process tests plus a real-socket run against the compiled build. **NOT PASS:** the live PostgreSQL suite — the only thing that can prove the advisory lock actually serializes, that a racing duplicate creates no alternate block or agent, that overlapping batches do not deadlock, and that cross-tenant isolation holds — is **SKIPPED**, gated on a `TEST_DATABASE_URL` that does not exist. |
 | AC-14 | Gone-dark | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-15 | 11:00 UTC digest | LATER | `DEFERRED` | Out of Credit phase. |
@@ -54,7 +54,7 @@ only and does not redefine any criterion.
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-18 | Revocable read-only share link | CREDIT | `NOT STARTED` | None. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
-| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **965 tests, 33 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
+| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **1065 tests, 35 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
 
 ---
@@ -217,7 +217,32 @@ AC-05 and AC-06 both move to `IMPLEMENTED / STAGING VERIFICATION BLOCKED` —
 **not PASS**. Neither has run against real PostgreSQL or in a staging
 environment.
 
-## Summary at Step 11
+## Step 12 note: policy versioning and polling
+
+Step 12 built the policy READ foundation that AC-07, AC-08, AC-10, AC-11 and
+AC-12 will rest on. **None of those criteria advances**: nothing here enforces a
+cap, evaluates a decision or lets an operator change anything.
+
+What it establishes:
+
+- **Every workspace is born with an authoritative policy version.** Creation is
+  now one transaction with three inserts — workspace, membership, policy state
+  at version 1 — because a workspace that cannot report a version is not a
+  usable workspace.
+- **Effective policy is computed, never persisted.** An agent with no explicit
+  row is `watch` with null caps. Defaults are not written, which is what keeps
+  event auto-discovery from mutating governance.
+- **The version is a string.** The column is a `bigint`; a JSON number would
+  lose precision above 2^53, the same defect the money contract rejects floats
+  for. It is read with a `::text` cast so no JS conversion happens at all.
+- **There is no policy writer.** The repository exposes none, and a guardrail
+  sweeps both packages to enforce that only provisioning may insert into
+  `workspace_policy_state` or `agent_policies`.
+
+Policy polling/versioning: **FOUNDATION IMPLEMENTED**. Not an acceptance
+criterion in its own right.
+
+## Summary at Step 12
 
 - `PASS`: **0**
 - `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **6** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-13)

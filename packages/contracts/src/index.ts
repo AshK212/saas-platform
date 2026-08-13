@@ -64,6 +64,24 @@ export type {
   ValidationIssue,
 } from './events.js';
 export {
+  agentModeSchema,
+  DEFAULT_AGENT_MODE,
+  effectiveAgentPolicySchema,
+  policyErrorSchema,
+  policyPollQuerySchema,
+  policySnapshotSchema,
+  policyVersionSchema,
+  POLICY_POLL_PATH,
+  POLICY_SINCE_VERSION_PARAM,
+} from './policy.js';
+export type {
+  AgentMode,
+  EffectiveAgentPolicy,
+  PolicyError,
+  PolicyPollQuery,
+  PolicySnapshot,
+} from './policy.js';
+export {
   eventAgentRefSchema,
   eventBlockRefSchema,
   eventDetailResponseSchema,

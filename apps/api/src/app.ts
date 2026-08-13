@@ -9,7 +9,9 @@ import type { EventReadStore } from './events/read-store.js';
 import type { EventIngestStore } from './events/store.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createEventRoutes } from './routes/events.js';
+import { createPolicyRoutes } from './routes/policy.js';
 import { createTimelineRoutes } from './routes/timeline.js';
+import type { PolicyStore } from './policy/store.js';
 import { createApiKeyRoutes } from './routes/api-keys.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -83,6 +85,15 @@ export interface AppDependencies {
    */
   readonly eventReadStore?: EventReadStore | undefined;
 
+  /**
+   * Policy reads for machine polling. `undefined` when the database is
+   * unconfigured - `GET /v1/policy` then answers 503 while liveness stays
+   * unaffected.
+   *
+   * Read-only by construction: there is no policy writer anywhere in Step 12.
+   */
+  readonly policyStore?: PolicyStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -90,14 +101,14 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 11 SCOPE
+ * STEP 12 SCOPE
  * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
- * workspace API credentials, the agent registry, idempotent event INGEST, and
- * the operator event TIMELINE and raw event detail.
+ * workspace API credentials, the agent registry, idempotent event INGEST, the
+ * operator event TIMELINE and raw detail, and machine policy POLLING.
  *
- * Policies, prechecks, ledger, receipts, exports, rollups, sharing and demo are
- * intentionally absent.
+ * Policy MUTATION (Step 13), prechecks, ledger, receipts, exports, rollups,
+ * sharing and demo are intentionally absent. No route here writes policy.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -180,6 +191,14 @@ export function createApp(dependencies: AppDependencies): Hono {
     '/',
     createEventRoutes({
       eventStore: dependencies.eventStore,
+      apiKeyStore: dependencies.apiKeyStore,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createPolicyRoutes({
+      policyStore: dependencies.policyStore,
       apiKeyStore: dependencies.apiKeyStore,
       clock: dependencies.clock ?? systemClock,
     }),

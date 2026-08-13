@@ -55,6 +55,14 @@ export { createIngestLockRepository } from './ingest-locks.js';
 export type { EventLockRequest, IngestLockRepository } from './ingest-locks.js';
 export { compareLockKeys, eventIngestLockKey } from './lock-keys.js';
 
+export {
+  agentPolicyScopePredicate,
+  createPolicyReadRepository,
+  policyQueries,
+  policyStateScopePredicate,
+} from './policy.js';
+export type { EffectiveAgentPolicyRow, PolicyReadRepository } from './policy.js';
+
 export { createPrecheckReceiptRepository } from './receipts.js';
 export type { PrecheckReceiptRepository } from './receipts.js';
 

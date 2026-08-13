@@ -130,4 +130,19 @@ describe('event vocabulary agrees with the database enums', () => {
       enumValuesFromMigration('action_category'),
     );
   });
+
+  it('agent_mode matches exactly', () => {
+    // Step 12 publishes modes on the polling surface. A divergence would mean
+    // the API reporting a mode PostgreSQL cannot store, or - worse - Step 13
+    // accepting one it cannot persist.
+    expect(contracts.agentModeSchema.options).toEqual(enumValuesFromMigration('agent_mode'));
+  });
+
+  it('the default mode is a member of the locked vocabulary', () => {
+    // `watch` means observe and record, enforce nothing - the only safe
+    // default. `budgeted` would apply caps nobody configured and `paused`
+    // would halt an agent the operator never chose to stop.
+    expect(contracts.agentModeSchema.options).toContain(contracts.DEFAULT_AGENT_MODE);
+    expect(contracts.DEFAULT_AGENT_MODE).toBe('watch');
+  });
 });

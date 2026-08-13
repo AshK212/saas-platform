@@ -8,6 +8,7 @@ import {
   listWorkspacesForUser,
 } from '../src/resolvers/authorization';
 import { users } from '../src/schema/identity';
+import { workspacePolicyState } from '../src/schema/policy';
 import { workspaceMemberships, workspaces } from '../src/schema/workspaces';
 
 /**
@@ -53,7 +54,7 @@ describe.skipIf(!hasTestDatabase)('live workspace authorization', () => {
     return createDatabaseClient(pool);
   }
 
-  it('creates workspace and creator membership atomically', async () => {
+  it('creates workspace, creator membership AND policy state atomically', async () => {
     const db = getDb();
 
     try {
@@ -73,22 +74,40 @@ describe.skipIf(!hasTestDatabase)('live workspace authorization', () => {
       expect(membershipRows).toHaveLength(1);
       expect(membershipRows[0]?.userId).toBe(alice?.id);
 
+      // Step 12: a workspace that cannot report a policy version is not a
+      // usable workspace, so the third row commits with the other two.
+      const policyRows = await db
+        .select()
+        .from(workspacePolicyState)
+        .where(eq(workspacePolicyState.workspaceId, created.id));
+      expect(policyRows).toHaveLength(1);
+      expect(policyRows[0]?.version).toBe(1);
+
       // Secure defaults: never publicly visible.
       const workspaceRows = await db.select().from(workspaces).where(eq(workspaces.id, created.id));
       expect(workspaceRows[0]?.demoEnabled).toBe(false);
       expect(workspaceRows[0]?.demoSlug).toBeNull();
     } finally {
+      await db
+        .delete(workspacePolicyState)
+        .where(
+          inArray(
+            workspacePolicyState.workspaceId,
+            db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.name, 'Live Workspace')),
+          ),
+        );
       await db.delete(users).where(inArray(users.email, ALL_EMAILS));
       await db.delete(workspaces).where(eq(workspaces.name, 'Live Workspace'));
     }
   });
 
-  it('ROLLBACK: a failing membership insert leaves no orphaned workspace', async () => {
+  it('ROLLBACK: a failing membership insert leaves no orphaned workspace or policy state', async () => {
     const db = getDb();
     const before = await db.select().from(workspaces).where(eq(workspaces.name, 'Doomed'));
 
     // A non-existent creator makes the membership FK fail inside the same
-    // transaction as the workspace insert.
+    // transaction as the workspace insert - and now also before the policy
+    // state insert, so all three must roll back together.
     await expect(
       createWorkspaceWithOperator(db, {
         name: 'Doomed',
@@ -98,7 +117,8 @@ describe.skipIf(!hasTestDatabase)('live workspace authorization', () => {
 
     const after = await db.select().from(workspaces).where(eq(workspaces.name, 'Doomed'));
 
-    // An orphaned workspace would be permanently unreachable.
+    // An orphaned workspace would be permanently unreachable; an orphaned
+    // policy state would outlive its workspace.
     expect(after).toHaveLength(before.length);
   });
 

@@ -1,5 +1,6 @@
 import type { DatabaseClient } from '../client.js';
 import type { AuthorizedWorkspaceSummary } from '../resolvers/authorization.js';
+import { workspacePolicyState } from '../schema/policy.js';
 import { workspaceMemberships, workspaces } from '../schema/workspaces.js';
 
 /**
@@ -28,12 +29,28 @@ export interface CreateWorkspaceInput {
 }
 
 /**
- * Creates a workspace and its creator's membership ATOMICALLY.
+ * Creates a workspace, its creator's membership and its policy state ATOMICALLY.
  *
- * Both rows commit together or neither does. A workspace whose creator
- * membership failed would be permanently unreachable - nobody could authorize
- * into it, and no route exists to repair it - so a partial success here is a
- * worse outcome than an outright failure.
+ * All three rows commit together or none does:
+ *
+ *   BEGIN
+ *     INSERT workspace
+ *     INSERT workspace_membership   (creator, operator)
+ *     INSERT workspace_policy_state (version = 1)
+ *   COMMIT
+ *
+ * A workspace whose creator membership failed would be permanently unreachable
+ * - nobody could authorize into it, and no route exists to repair it. A
+ * workspace whose POLICY STATE failed would be equally broken in a different
+ * way: `GET /v1/policy` treats a missing version as an invariant violation and
+ * returns a controlled error rather than inventing version 0 or an empty
+ * policy. There is deliberately no lazy "create it on first read" path, because
+ * a GET that repairs state is a GET that hides provisioning defects - and this
+ * is the only supported way a workspace comes into existence.
+ *
+ * Version starts at 1, matching the `version >= 1` check constraint. Only the
+ * Step 13 mutation service may increment it, and it will do so inside the same
+ * transaction as the policy change itself.
  *
  * SECURE DEFAULTS
  * ---------------
@@ -77,6 +94,21 @@ export async function createWorkspaceWithOperator(
     const membership = insertedMemberships[0];
     if (membership === undefined) {
       throw new Error('Failed to create workspace membership.');
+    }
+
+    // Policy INITIALIZATION, not policy mutation: this establishes the
+    // authoritative version a workspace is born with. The value is stated
+    // explicitly rather than relying on the column default, so the starting
+    // version is visible at the point it is decided.
+    const insertedPolicyState = await tx
+      .insert(workspacePolicyState)
+      .values({ workspaceId: workspace.id, version: 1 })
+      .returning({ version: workspacePolicyState.version });
+
+    if (insertedPolicyState[0] === undefined) {
+      // Rolls back the workspace and the membership too. A workspace that
+      // cannot report a policy version is not a usable workspace.
+      throw new Error('Failed to create workspace policy state.');
     }
 
     return { id: workspace.id, name: workspace.name, role: membership.role };

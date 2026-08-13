@@ -125,15 +125,47 @@ describe('tenant provisioning is narrow', () => {
     expect(functions).toEqual(['createWorkspaceWithOperator']);
   });
 
-  it('creates the workspace and its membership in one transaction', () => {
+  it('creates the workspace, its membership AND its policy state in one transaction', () => {
     const source = readFileSync(
       path.join(PACKAGE_ROOT, 'src', 'provisioning', 'workspaces.ts'),
       'utf8',
     );
 
-    // A workspace whose creator membership failed would be unreachable forever.
+    // A workspace whose creator membership failed would be unreachable
+    // forever. A workspace whose POLICY STATE failed would report no version,
+    // which `GET /v1/policy` treats as an invariant violation - so all three
+    // must commit together or none may.
     expect(source).toContain('db.transaction(');
-    expect((source.match(/\.insert\(/g) ?? []).length).toBe(2);
+    expect((source.match(/\.insert\(/g) ?? []).length).toBe(3);
+    expect(source).toContain('.insert(workspaces)');
+    expect(source).toContain('.insert(workspaceMemberships)');
+    expect(source).toContain('.insert(workspacePolicyState)');
+  });
+
+  it('initializes the policy version to 1 explicitly', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'provisioning', 'workspaces.ts'),
+      'utf8',
+    );
+
+    // Stated at the point it is decided rather than inherited from the column
+    // default, and matching the `version >= 1` check constraint. Version 0
+    // would be indistinguishable from "no state" to a polling client.
+    expect(source).toMatch(/workspaceId: workspace\.id,\s*version: 1/);
+  });
+
+  it('provisioning sets no policy VALUES, only the version', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'provisioning', 'workspaces.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // This is policy INITIALIZATION, not policy mutation. Creating agent
+    // policy rows or caps here would mean a workspace is born with governance
+    // nobody configured.
+    expect(code).not.toContain('agentPolicies');
+    expect(code).not.toMatch(/\bmode\b|dailySpendCap|dailyPublishCap/);
   });
 
   it('cannot create a publicly visible workspace', () => {
@@ -213,7 +245,7 @@ describe('repository factories require a workspace scope', () => {
 
 describe('every repository source file scopes its queries', () => {
   /** Files whose every statement is a read. */
-  const READ_ONLY_FILES = ['receipts.ts', 'runtime-profiles.ts'];
+  const READ_ONLY_FILES = ['policy.ts', 'receipts.ts', 'runtime-profiles.ts'];
 
   /**
    * Files that also perform SCOPED writes.
@@ -541,6 +573,76 @@ describe('mutation surface stays narrow and scoped', () => {
     // exclude each other on the same event.
     expect(code).not.toMatch(/Math\.random|Date\.now|process\.(pid|env)|randomUUID/);
     expect(code).toContain("createHash('sha256')");
+  });
+
+  it('THE POLICY REPOSITORY HAS NO WRITER', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The single most important guarantee in Step 12. Event ingest, agent
+    // registration, API-key auth, share links and the demo all reach the data
+    // layer; a policy mutator reachable from any of them would let a runtime
+    // edit the governance it is subject to.
+    expect(code).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+    expect(code).not.toMatch(/\b(updatePolicy|savePolicy|setMode|setCap|bumpVersion|incrementVersion)\b/i);
+  });
+
+  it('no application code outside provisioning writes policy tables', () => {
+    // Source-level sweep across BOTH packages, catching a deep import too.
+    const roots = [
+      path.join(PACKAGE_ROOT, 'src'),
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps'),
+    ];
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        // Provisioning legitimately inserts the initial policy STATE row.
+        if (full.endsWith(path.join('provisioning', 'workspaces.ts'))) continue;
+        if (full.includes(`${path.sep}tests${path.sep}`)) continue;
+
+        const code = readFileSync(full, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, '');
+
+        if (/\.(insert|update|delete)\([\s]*(agentPolicies|workspacePolicyState)/.test(code)) {
+          offenders.push(full);
+        }
+      }
+    };
+    for (const root of roots) walk(root);
+
+    expect(offenders, 'only provisioning may write policy tables').toEqual([]);
+  });
+
+  it('policy reads are workspace-anchored on both sides of the join', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Joining on the agent UUID alone would be a global join: a policy row
+    // from another tenant could pair with this tenant's agent.
+    expect(code).toContain('eq(agentPolicies.agentId, agents.id)');
+    expect(code).toContain('eq(agentPolicies.workspaceId, agents.workspaceId)');
+    // And the join starts FROM agents, so an agent with no policy row is still
+    // returned - the "empty policy for a known workspace" failure mode.
+    expect(code).toMatch(/\.from\(agents\)[\s\S]{0,200}\.leftJoin\(/);
+  });
+
+  it('the policy version is read as text, never as a JS number', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The column is a bigint. Converting through Number would silently lose
+    // precision above 2^53 - invisible if it ever happened, free to avoid.
+    expect(code).toContain('::text');
+    expect(code).not.toMatch(/Number\(|parseInt\(/);
   });
 
   it('the receipt repository can only test existence', () => {
