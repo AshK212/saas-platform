@@ -2,22 +2,23 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 12, policy versioning and agent polling.**
+**Current phase: Credit — Step 13, operator policy mutation.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
 the agent registry, idempotent event ingest via `POST /v1/events`, the operator
-event timeline with raw JSON drill-through, and machine policy polling via
-`GET /v1/policy`.
+event timeline with raw JSON drill-through, machine policy polling via
+`GET /v1/policy`, and operator policy configuration with atomic versioning.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
-policy *editing*, no ledger, no precheck, no exports, rollups, sharing or demo.
+ledger, no precheck, no enforcement, no exports, rollups, sharing or demo.
 **Being signed in grants access to no workspace** — tenant access comes only
 from a membership, re-proven on every request.
 
-> **Policy is readable, not writable.** `GET /v1/policy` reports the current
-> snapshot; nothing in the codebase can change a mode or a cap, and no route
-> enforces one. See [policy](docs/policy.md).
+> **Policy is configurable, not enforced.** An operator can set a mode, a spend
+> cap and a publish cap, and an agent will receive them within one poll. Nothing
+> stops a paused agent, and no cap denies anything — enforcement arrives with
+> precheck. See [policy](docs/policy.md).
 
 > **Machine keys write; browser sessions read.** `POST /v1/events` accepts only
 > a bearer API key. The timeline accepts only a session cookie. A machine that
@@ -247,7 +248,7 @@ behind that prefix.
 - [Authentication](docs/authentication.md) — magic-link flow, cookies, CORS, limits
 - [API authentication](docs/api-authentication.md) — API-key format, hashing, revocation
 - [Event contracts](docs/event-contracts.md) — ingest transport, replay idempotency, and the timeline / raw-detail read surface
-- [Policy](docs/policy.md) — workspace policy versioning, effective defaults, and `GET /v1/policy` agent polling
+- [Policy](docs/policy.md) — workspace policy versioning, effective defaults, agent polling, and atomic operator mutation
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -256,11 +257,11 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 12: policy *mutation* (no
-way to set a mode or a cap), cap and pause *enforcement*, prechecks and
-receipts, the ledger and any spend accounting, plane-owned blocks, CSV/JSON
-export, daily rollups and charts, gone-dark detection, share links, the public
-demo, simulator scenarios, and any Hermes/OpenClaw runtime integration.
+The following are **deliberately absent** as of Step 13: cap, publish and pause
+*enforcement*, prechecks and receipts, the ledger and any spend accounting,
+plane-owned blocks, CSV/JSON export, daily rollups and charts, gone-dark
+detection, share links, the public demo, simulator scenarios, and any
+Hermes/OpenClaw runtime integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

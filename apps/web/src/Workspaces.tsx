@@ -148,11 +148,17 @@ export function Workspaces(): JSX.Element {
               Authorized for <span className="font-medium">{selected.name}</span> as{' '}
               {selected.role}.
             </p>
-            <p className="mt-1 text-slate-500">Policy and spend controls arrive in later steps.</p>
+            <p className="mt-1 text-slate-500">
+              Agent policy is configurable below. Enforcement arrives in a later step.
+            </p>
           </div>
 
           <div className="border-t border-slate-800 pt-5">
-            <Agents key={`agents-${selected.id}`} workspaceId={selected.id} />
+            <Agents
+              key={`agents-${selected.id}`}
+              workspaceId={selected.id}
+              canManagePolicy={selected.role === 'operator'}
+            />
           </div>
 
           <div className="border-t border-slate-800 pt-5">

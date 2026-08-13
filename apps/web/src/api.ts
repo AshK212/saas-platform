@@ -14,8 +14,13 @@ import {
   type AgentSummary,
   type ApiKeySummary,
   type IssuedApiKey,
+  agentPolicyMutationRequestSchema,
+  agentPolicyPath,
+  agentPolicyResponseSchema,
   currentUserResponseSchema,
   eventDetailResponseSchema,
+  type AgentPolicyMutationRequest,
+  type AgentPolicyResponse,
   magicLinkRequestSchema,
   magicLinkResponseSchema,
   TIMELINE_AGENT_PARAM,
@@ -204,6 +209,69 @@ export async function fetchEventDetail(
     throw new Error('Unexpected response from the server.');
   }
   return parsed.data.event;
+}
+
+/**
+ * Reads one agent's EFFECTIVE policy, for populating the editor.
+ *
+ * Effective, not stored: an agent that has never been configured reports the
+ * default (`watch`, uncapped) rather than an empty form the operator might
+ * read as "no policy applies".
+ */
+export async function fetchAgentPolicy(
+  workspaceId: string,
+  agentId: string,
+): Promise<AgentPolicyResponse | null> {
+  const response = await fetch(agentPolicyPath(workspaceId, agentId), {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    return null;
+  }
+
+  const parsed = agentPolicyResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Saves one agent's complete policy.
+ *
+ * PUT with the whole object: the server replaces all three fields, so clearing
+ * a cap actually clears it. The response carries the committed workspace policy
+ * version, which agents pick up on their next poll.
+ */
+export async function saveAgentPolicy(
+  workspaceId: string,
+  agentId: string,
+  policy: AgentPolicyMutationRequest,
+): Promise<AgentPolicyResponse> {
+  // Validated client-side too, so an impossible request never leaves the
+  // browser and the operator sees the problem immediately.
+  const parsedRequest = agentPolicyMutationRequestSchema.safeParse(policy);
+  if (!parsedRequest.success) {
+    throw new Error('That policy is not valid.');
+  }
+
+  const response = await fetch(agentPolicyPath(workspaceId, agentId), {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(parsedRequest.data),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Only workspace operators can change agent policy.'
+        : 'Could not save the policy.',
+    );
+  }
+
+  const parsed = agentPolicyResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data;
 }
 
 /** Lists a workspace's API credentials. Safe metadata only - never a key. */

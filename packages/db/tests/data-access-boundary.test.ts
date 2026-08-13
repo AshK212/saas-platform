@@ -255,7 +255,13 @@ describe('every repository source file scopes its queries', () => {
    * repository is a deliberate, reviewed addition rather than something that
    * slips past a blanket "no writes" rule.
    */
-  const WRITING_FILES = ['agents.ts', 'api-credentials.ts', 'blocks.ts', 'events.ts'];
+  const WRITING_FILES = [
+    'agents.ts',
+    'api-credentials.ts',
+    'blocks.ts',
+    'events.ts',
+    'policy-mutation.ts',
+  ];
 
   /**
    * Files in `repositories/` that hold no query at all, and why.
@@ -587,11 +593,23 @@ describe('mutation surface stays narrow and scoped', () => {
     expect(code).not.toMatch(/\b(updatePolicy|savePolicy|setMode|setCap|bumpVersion|incrementVersion)\b/i);
   });
 
-  it('no application code outside provisioning writes policy tables', () => {
+  it('EXACTLY TWO files may write policy tables', () => {
     // Source-level sweep across BOTH packages, catching a deep import too.
+    //
+    //   provisioning/workspaces.ts  - inserts the INITIAL version row only
+    //   repositories/policy-mutation.ts - the versioned mutation service
+    //
+    // Anything else writing `agent_policies` or `workspace_policy_state` would
+    // be an UNVERSIONED policy write: a governance change invisible to every
+    // polling agent, which would keep receiving 304 and running under the old
+    // policy indefinitely.
     const roots = [
       path.join(PACKAGE_ROOT, 'src'),
       path.resolve(PACKAGE_ROOT, '..', '..', 'apps'),
+    ];
+    const PERMITTED = [
+      path.join('provisioning', 'workspaces.ts'),
+      path.join('repositories', 'policy-mutation.ts'),
     ];
     const offenders: string[] = [];
 
@@ -604,8 +622,7 @@ describe('mutation surface stays narrow and scoped', () => {
           continue;
         }
         if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-        // Provisioning legitimately inserts the initial policy STATE row.
-        if (full.endsWith(path.join('provisioning', 'workspaces.ts'))) continue;
+        if (PERMITTED.some((permitted) => full.endsWith(permitted))) continue;
         if (full.includes(`${path.sep}tests${path.sep}`)) continue;
 
         const code = readFileSync(full, 'utf8')
@@ -619,7 +636,58 @@ describe('mutation surface stays narrow and scoped', () => {
     };
     for (const root of roots) walk(root);
 
-    expect(offenders, 'only provisioning may write policy tables').toEqual([]);
+    expect(offenders, 'only provisioning and the mutation service may write policy').toEqual([]);
+  });
+
+  it('THE POLICY WRITER ALWAYS INCREMENTS THE VERSION', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy-mutation.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The central Step 13 invariant. Both halves in ONE transaction.
+    expect(code).toContain('db.transaction(');
+    expect(code).toContain('.insert(agentPolicies)');
+    expect(code).toContain('.update(workspacePolicyState)');
+    // A single `version + 1` statement evaluated by PostgreSQL, NOT a
+    // read-then-write: two transactions that both read 10 would both write 11.
+    expect(code).toMatch(/version:\s*sql`\$\{workspacePolicyState\.version\} \+ 1`/);
+    // And serialized from the start, so concurrent mutations queue rather than
+    // interleave.
+    expect(code).toContain(".for('update')");
+  });
+
+  it('the policy writer is workspace-anchored and takes no workspace argument', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy-mutation.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Workspace from the SCOPE on every statement - the agent lookup, the
+    // upsert and the version bump alike. A globally unique agent UUID is not
+    // authorization.
+    expect(code).toContain('workspaceId: scope.workspaceId');
+    expect(code).toContain('eq(agents.workspaceId, scope.workspaceId)');
+    expect(code).toContain('eq(workspacePolicyState.workspaceId, scope.workspaceId)');
+    expect(code).not.toMatch(/workspaceId:\s*string\s*[,)]/);
+    // Conflict target is the composite identity, never the agent id alone.
+    expect(code).toContain('target: [agentPolicies.workspaceId, agentPolicies.agentId]');
+  });
+
+  it('the policy writer touches no ledger, receipt, block or event table', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy-mutation.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Raising a cap from 25 to 100 must NOT reset today's committed spend -
+    // that would let an operator erase history by editing configuration.
+    for (const forbidden of ['ledgerDaily', 'precheckReceipts', 'blocks', 'events']) {
+      expect(code, forbidden).not.toContain(forbidden);
+    }
   });
 
   it('policy reads are workspace-anchored on both sides of the join', () => {

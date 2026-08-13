@@ -1,14 +1,40 @@
-# Policy Versioning and Agent Polling
+# Policy Versioning, Agent Polling and Operator Mutation
 
-> **Policy read/versioning implemented in Step 12. Operator mutation is Step 13.**
+> **Policy read/versioning implemented in Step 12. Operator mutation implemented
+> in Step 13.**
 >
-> Nothing in this document describes a way to change a policy. There is no
-> mutation route, no mutation contract and no policy writer in the data layer —
-> only provisioning may insert the initial version row.
+> ## ⚠ CONFIGURATION EXISTS; ENFORCEMENT DOES NOT
+>
+> An operator can now set a mode, a spend cap and a publish cap, and an agent
+> will receive them. **Nothing enforces any of it.** A `paused` agent is not
+> stopped, a `$25` cap does not block a `$41` spend, and a publish cap denies
+> nothing. Enforcement arrives with precheck; authoritative spend accounting is
+> Step 19.
+>
+> Do not read "the cap is saved" as "the cap is active".
+
+## The two surfaces
+
+| | Machine read | Operator write |
+| --- | --- | --- |
+| Route | `GET /v1/policy` | `PUT /v1/workspaces/:workspaceId/agents/:agentId/policy` |
+| Auth | `Authorization: Bearer <API key>` | Session cookie |
+| Authorization | credential → workspace | membership → **`operator` role** |
+| CSRF | n/a (no cookie) | origin-guarded |
+| Effect | **read only** | **write**, version-incrementing |
+
+> **No other current path may mutate policy.** Event ingest, agent
+> registration, API-key authentication, policy polling, and the future share and
+> demo routes can only read. A guardrail sweeps both packages and fails the
+> build if any file other than provisioning and the mutation service writes
+> `agent_policies` or `workspace_policy_state`.
 
 Sources: [`packages/contracts/src/policy.ts`](../packages/contracts/src/policy.ts) ·
+[`packages/contracts/src/agent-policy.ts`](../packages/contracts/src/agent-policy.ts) ·
 [`packages/db/src/repositories/policy.ts`](../packages/db/src/repositories/policy.ts) ·
-[`apps/api/src/routes/policy.ts`](../apps/api/src/routes/policy.ts)
+[`packages/db/src/repositories/policy-mutation.ts`](../packages/db/src/repositories/policy-mutation.ts) ·
+[`apps/api/src/routes/policy.ts`](../apps/api/src/routes/policy.ts) ·
+[`apps/api/src/routes/agent-policy.ts`](../apps/api/src/routes/agent-policy.ts)
 
 ---
 
@@ -250,6 +276,175 @@ writer. The invariant is enforced where workspaces are created instead.
 
 ---
 
+## Operator mutation (Step 13)
+
+```http
+PUT /v1/workspaces/:workspaceId/agents/:agentId/policy
+Cookie: hybrid_auth_session=...
+Origin: https://app.example
+Content-Type: application/json
+```
+
+```jsonc
+{ "mode": "budgeted", "daily_spend_cap_usd": "25.000000", "daily_publish_cap": null }
+```
+
+```jsonc
+// 200
+{
+  "policy": {
+    "agent_id": "agent-a",
+    "mode": "budgeted",
+    "daily_spend_cap_usd": "25.000000",
+    "daily_publish_cap": null
+  },
+  "version": "2"
+}
+```
+
+### Authorization chain
+
+```text
+session cookie → AuthenticatedUser → membership → role == operator
+              → AuthorizedWorkspace → WorkspaceScope → versioned transaction
+```
+
+**An API key is refused with 401.** A runtime must never edit the governance it
+is subject to. It may read policy through `/v1/policy`; it may not write it
+anywhere.
+
+**A `member` gets 403 `insufficient_role`, not 404.** They already legitimately
+know the workspace exists, so hiding it would be theatre. Reading a policy is
+ordinary tenant data and any member may do it — the same split as API-key
+management.
+
+**Cross-tenant is 404.** An operator holding another workspace's exact internal
+agent UUID gets the same response as for an id that does not exist, and neither
+workspace's version moves. A globally unique UUID is not authorization.
+
+**CSRF.** `PUT` is a state-changing method, so the Step 6 origin guard applies:
+a foreign `Origin` carrying the victim's cookie is 403, and so is a cookie
+request with no `Origin` at all.
+
+### PUT, not PATCH
+
+The body is the **complete** policy. A partial update would need conflict rules
+for three fields, and "clear the spend cap" would become indistinguishable from
+"leave it alone". Every field is written on every save, so `null` really clears.
+
+There are deliberately no `/set-mode`, `/pause` or `/set-spend-cap` routes: one
+mutation surface is easier to secure and audit than five.
+
+### The request accepts no authority
+
+Strict object. There is no `workspace_id`, no `tenant_id`, no `agent_id` (the
+agent is the path) and no `version` — the version is server-authoritative, and
+accepting one would let a caller assert governance history. Unknown fields are a
+400, so a typo like `daily_spend_cap` fails loudly instead of silently leaving
+an agent uncapped.
+
+---
+
+## Atomic mutation and version increment
+
+```text
+BEGIN
+  1. SELECT version FROM workspace_policy_state
+       WHERE workspace_id = $1 FOR UPDATE
+     -- serializes concurrent mutations in this workspace from the start
+     -- missing row aborts HERE, before anything is written
+  2. SELECT agent WHERE workspace_id = $1 AND id = $2
+     -- not found => no write, reported as not-found
+  3. INSERT INTO agent_policies (...) VALUES (...)
+       ON CONFLICT (workspace_id, agent_id) DO UPDATE SET ...
+  4. UPDATE workspace_policy_state SET version = version + 1
+       WHERE workspace_id = $1 RETURNING version::text
+COMMIT
+```
+
+**Neither half can commit alone.** A policy changed without a version bump would
+be invisible to every polling agent — they would keep sending `since_version=N`,
+receive 304, and run indefinitely under governance the operator believes they
+replaced. A version bumped without a policy change would make every agent
+re-download an unchanged snapshot and corrupt the history precheck receipts will
+later cite.
+
+The response's `policy` and `version` therefore always describe the same
+committed transaction.
+
+### Why not read-then-write
+
+`SELECT version` then `UPDATE ... SET version = <read + 1>` **loses increments**:
+two transactions both read 10 and both write 11. Step 4 is a single
+`version + 1` statement evaluated by PostgreSQL against a row it holds a lock
+on, so two committed mutations always produce two distinct versions. The
+`FOR UPDATE` at step 1 starts that serialization before any work rather than at
+the last statement.
+
+### Concurrency semantics
+
+| Scenario | Result |
+| --- | --- |
+| Two agents, same workspace, concurrently | Versions 2 and 3; final 3 |
+| Eight concurrent mutations | Eight distinct versions; final 9 |
+| **Same agent** twice concurrently | Both commit; version +2; last writer wins the row |
+| Two workspaces concurrently | Independent counters; both reach 2 |
+
+For the same-agent case the row ends as **exactly one** of the two submitted
+policies — never a mix of fields from both. No optimistic-locking token is
+exposed: the requirements do not ask for one, and adding a client-supplied
+version would create a new way for a caller to assert authority.
+
+### Always increments
+
+A save with values identical to the stored ones **still increments**. The
+operator performed a governance write, and suppressing the bump would make the
+version history depend on a value comparison — two operators saving the same
+values would see different histories depending on who went first. Deterministic
+beats clever.
+
+A **rejected** request increments nothing: not a 400, not a 403, not a 404, not
+a CSRF rejection. The version is itself governance state.
+
+### Missing policy state
+
+Aborts at step 1, before any write, and returns a controlled 500. **No
+self-healing**: creating the version row during a mutation would hide the
+provisioning defect and accept a governance write against a workspace whose
+history never existed.
+
+---
+
+## Propagation
+
+A committed write is visible **immediately** — there is no server-side delay
+anywhere. The runtime's ~30-second poll cadence is the only latency in the loop:
+
+```text
+operator saves          -> version 1 becomes 2
+agent polls since_version=1 -> 200 with the new snapshot at version 2
+agent polls since_version=2 -> 304
+```
+
+This is the propagation half of AC-10. The enforcement half does not exist yet.
+
+---
+
+## Money and counts on the write path
+
+The operator may type `25`, `25.00` or `25.000000`. Normalisation is **pure
+string manipulation** in `normalizeSpendCapInput` — no `parseFloat`, no
+`toFixed`, no arithmetic — so the digits typed are the digits stored in
+`numeric(14,6)`.
+
+Refused rather than rounded: negatives, `+5`, exponent notation, seven decimals,
+nine integer digits, `025`, `.5`, `25.`, `1,000`, `$25`. Publish counts refuse
+`5.5`, `-1`, `05` and anything above `int4`.
+
+`0` and `null` stay distinct on the write path exactly as on the read path.
+
+---
+
 ## What polling does NOT do
 
 - **No policy mutation.** No mode change, no cap change, no version increment,
@@ -263,25 +458,39 @@ writer. The invariant is enforced where workspaces are created instead.
 - **No events, no blocks, no receipts.**
 - **No enforcement.** Nothing acts on `paused` or on a cap here.
 
-## Not implemented in Step 12
+## What mutation does NOT do
 
-- **Operator policy mutation** — Step 13. Version increment will be atomic with
-  the change itself, in one transaction.
+- **No enforcement.** Storing `paused` pauses nothing; storing a cap blocks
+  nothing.
+- **No ledger effect.** Raising a cap from 25 to 100 does **not** reset or
+  adjust today's committed spend — that would let an operator erase history by
+  editing configuration. The mutation module imports no ledger table.
+- **No receipts, no blocks, no events.** Those are enforcement artifacts.
+- **No policy-change event stream.** The requirements do not ask for one.
+- **No policy history table.** Monotonic version plus the receipt's recorded
+  version is the evidence model; a change-audit product is not in scope.
+
+## Not implemented in Step 13
+
 - **Precheck decisions and receipts.** Every future receipt will record the
-  exact policy version it evaluated against; this step is the foundation for
-  that.
+  exact policy version it evaluated against; the version model exists for that.
+- **The authoritative UTC-day ledger** — Step 14.
 - **Ledger debit** — Step 19. `spend.recorded` still does **not** debit the
   authoritative ledger.
-- **Cap and pause enforcement** (AC-07, AC-08, AC-10, AC-11, AC-12).
-- **Any policy UI.** No spend-cap, mode or publish-cap controls exist.
+- **Cap, publish and pause ENFORCEMENT** (AC-07, AC-08, AC-10, AC-11, AC-12).
 
 ## Verification status
 
 | Behaviour | Evidence |
 | --- | --- |
-| Auth domain, 304, version semantics, defaults, isolation, no-write | 67 route tests |
-| Workspace predicate, join scoping, `::text` cast, no writer | 15 compiled-SQL tests |
-| Atomic provisioning, rollback, LEFT JOIN, bigint round trip, exact decimals | `packages/db/tests/policy.live.test.ts` — **gated on `TEST_DATABASE_URL`; currently SKIPPED** |
+| Poll auth, 304, version semantics, defaults, isolation, no-write | 68 route tests |
+| Mutation auth, role, CSRF, cross-tenant, validation, boundaries, atomicity | 66 route tests |
+| Write → poll propagation on shared state | 8 tests |
+| Money/count normalisation and the operator contract | 60 contract tests |
+| Workspace predicate, join scoping, `::text` cast, no unversioned writer | 15 compiled-SQL tests + boundary guards |
+| Atomic provisioning, LEFT JOIN, bigint round trip, exact decimals | `packages/db/tests/policy.live.test.ts` — **SKIPPED** |
+| Concurrent versioning, lost-increment prevention, rollback, cross-tenant | `packages/db/tests/policy-mutation.live.test.ts` — **SKIPPED** |
 
-The live suite has **never been executed**: no test database is available, and
-none was invented.
+Both live suites have **never been executed**: no test database is available,
+and none was invented. The concurrency guarantees above are argued and
+tested-but-unrun.

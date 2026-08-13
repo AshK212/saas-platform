@@ -7,10 +7,12 @@ import { systemClock, type Clock } from './auth/clock.js';
 import type { AuthService } from './auth/service.js';
 import type { EventReadStore } from './events/read-store.js';
 import type { EventIngestStore } from './events/store.js';
+import { createAgentPolicyRoutes } from './routes/agent-policy.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createEventRoutes } from './routes/events.js';
 import { createPolicyRoutes } from './routes/policy.js';
 import { createTimelineRoutes } from './routes/timeline.js';
+import type { PolicyMutationStore } from './policy/mutation-store.js';
 import type { PolicyStore } from './policy/store.js';
 import { createApiKeyRoutes } from './routes/api-keys.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -94,6 +96,15 @@ export interface AppDependencies {
    */
   readonly policyStore?: PolicyStore | undefined;
 
+  /**
+   * Operator policy WRITES. `undefined` when the database is unconfigured.
+   *
+   * The only policy writer wired into the application. It is deliberately a
+   * separate dependency from `policyStore`, so the machine polling route
+   * cannot reach a mutator.
+   */
+  readonly policyMutationStore?: PolicyMutationStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -101,14 +112,16 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 12 SCOPE
+ * STEP 13 SCOPE
  * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
  * workspace API credentials, the agent registry, idempotent event INGEST, the
- * operator event TIMELINE and raw detail, and machine policy POLLING.
+ * operator event TIMELINE and raw detail, machine policy POLLING, and operator
+ * policy MUTATION.
  *
- * Policy MUTATION (Step 13), prechecks, ledger, receipts, exports, rollups,
- * sharing and demo are intentionally absent. No route here writes policy.
+ * Prechecks, the ledger, receipts, enforcement of any kind, exports, rollups,
+ * sharing and demo are intentionally absent. Exactly one route writes policy,
+ * and it requires a browser session and the `operator` role.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -201,6 +214,14 @@ export function createApp(dependencies: AppDependencies): Hono {
       policyStore: dependencies.policyStore,
       apiKeyStore: dependencies.apiKeyStore,
       clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createAgentPolicyRoutes({
+      policyMutationStore: dependencies.policyMutationStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
     }),
   );
   app.route(

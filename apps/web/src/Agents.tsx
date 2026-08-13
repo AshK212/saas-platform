@@ -1,6 +1,7 @@
 import type { AgentSummary } from '@hybrid/contracts';
 import { useEffect, useState, type JSX } from 'react';
 
+import { AgentPolicy } from './AgentPolicy';
 import { listAgents } from './api';
 
 /**
@@ -16,6 +17,8 @@ import { listAgents } from './api';
 
 interface AgentsProps {
   readonly workspaceId: string;
+  /** False for `member`: policy is readable but the controls are disabled. */
+  readonly canManagePolicy: boolean;
 }
 
 type LoadState =
@@ -49,10 +52,12 @@ function describeLastSeen(iso: string | null, now: number): string {
   return `${String(days)} day${days === 1 ? '' : 's'} ago`;
 }
 
-export function Agents({ workspaceId }: AgentsProps): JSX.Element {
+export function Agents({ workspaceId, canManagePolicy }: AgentsProps): JSX.Element {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   /** Captured once per load so every row measures against the same instant. */
   const [loadedAt, setLoadedAt] = useState(() => Date.now());
+  /** Which agent's policy editor is open. One at a time keeps the page calm. */
+  const [editing, setEditing] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,19 +109,39 @@ export function Agents({ workspaceId }: AgentsProps): JSX.Element {
       {state.status === 'ready' && state.agents.length > 0 && (
         <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
           {state.agents.map((agent) => (
-            <li key={agent.id} className="flex items-center justify-between gap-4 px-4 py-3">
-              <span className="min-w-0">
-                <span className="block truncate text-sm text-slate-100">
-                  {agent.name ?? agent.agentId}
+            <li key={agent.id} className="space-y-3 px-4 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-slate-100">
+                    {agent.name ?? agent.agentId}
+                  </span>
+                  <span className="block font-mono text-xs text-slate-500">{agent.agentId}</span>
                 </span>
-                <span className="block font-mono text-xs text-slate-500">{agent.agentId}</span>
-              </span>
-              <span
-                className="shrink-0 text-xs text-slate-400"
-                title={agent.lastSeenAt ?? 'never seen'}
-              >
-                {describeLastSeen(agent.lastSeenAt, loadedAt)}
-              </span>
+                <span className="flex shrink-0 items-center gap-3">
+                  <span className="text-xs text-slate-400" title={agent.lastSeenAt ?? 'never seen'}>
+                    {describeLastSeen(agent.lastSeenAt, loadedAt)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditing((current) => (current === agent.id ? null : agent.id));
+                    }}
+                    className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800"
+                  >
+                    {editing === agent.id ? 'Close' : 'Policy'}
+                  </button>
+                </span>
+              </div>
+
+              {editing === agent.id && (
+                <AgentPolicy
+                  key={`policy-${agent.id}`}
+                  workspaceId={workspaceId}
+                  agentId={agent.id}
+                  agentLabel={agent.name ?? agent.agentId}
+                  canManage={canManagePolicy}
+                />
+              )}
             </li>
           ))}
         </ul>

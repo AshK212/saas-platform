@@ -714,13 +714,14 @@ describe('no mutation surface', () => {
     expect(response.status).toBe(404);
   });
 
-  it('exposes no per-agent policy mutation route', async () => {
+  it('the machine poll path exposes no sub-routes', async () => {
     const t = await tenant('op@example.test', 'Acme');
 
+    // Step 13 added an OPERATOR policy route under /v1/workspaces/...; the
+    // machine surface itself gained nothing.
     for (const path of [
       `${POLICY_POLL_PATH}/agent-a`,
       `/v1/workspaces/${t.workspaceId}/policy`,
-      `/v1/workspaces/${t.workspaceId}/agents/agent-a/policy`,
       '/v1/policy/version',
     ]) {
       const response = await app.request(path, {
@@ -728,6 +729,34 @@ describe('no mutation surface', () => {
       });
       expect(response.status, path).toBe(404);
     }
+  });
+
+  it('an API key cannot reach the operator policy route', async () => {
+    const t = await tenant('op@example.test', 'Acme');
+
+    const response = await app.request(
+      `/v1/workspaces/${t.workspaceId}/agents/33333333-3333-4333-8333-333333333333/policy`,
+      {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${t.key}`,
+          origin: APP_URL,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'paused',
+          daily_spend_cap_usd: null,
+          daily_publish_cap: null,
+        }),
+      },
+    );
+
+    // No mutation store wired in this app, so the route reports unavailable
+    // rather than authenticating a machine credential. Either way the key
+    // never reaches a policy write - the dedicated 401 assertion lives in
+    // agent-policy-routes.test.ts, where the store IS wired.
+    expect([401, 503]).toContain(response.status);
+    expect(response.status).not.toBe(200);
   });
 });
 

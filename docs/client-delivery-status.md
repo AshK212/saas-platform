@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 12 — policy versioning and agent polling).
+Last updated: **2026-08-12** (Step 13 — authenticated operator policy mutation).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -112,7 +112,16 @@ confirmed against a real client-owned Neon project:
   agents with no policy row, that a `bigint` version beyond 2^53 round-trips
   exactly, that `numeric(14,6)` yields an exact decimal string rather than a
   float, and that policy rows cannot cross tenants. **The atomic-provisioning
-  change made in Step 12 has never run against a real database.**
+  change made in Step 12 has never run against a real database**;
+- the **fourteen Step 13 live policy-mutation tests**, currently **skipped**.
+  These are the ones that prove the central Step 13 invariant: that two
+  concurrent mutations produce two distinct versions rather than both reading N
+  and both writing N+1, that `SELECT ... FOR UPDATE` really serializes them,
+  that eight simultaneous mutations yield eight distinct versions, that a
+  same-agent race leaves one complete policy rather than a mix of fields, and
+  that a failure in either half rolls the other back. Single-threaded JavaScript
+  makes an increment atomic for free; PostgreSQL does not. **Every concurrency
+  guarantee in Step 13 is argued and tested-but-unrun.**
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
@@ -218,6 +227,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
-| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05, AC-06, AC-13**, policy provisioning atomicity, and AC-20 cross-tenant isolation — 78 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05, AC-06, AC-13**, policy provisioning atomicity, policy-mutation concurrency, and AC-20 cross-tenant isolation — 92 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
 | Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

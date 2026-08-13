@@ -64,6 +64,19 @@ export type {
   ValidationIssue,
 } from './events.js';
 export {
+  agentPolicyErrorSchema,
+  agentPolicyMutationRequestSchema,
+  agentPolicyPath,
+  agentPolicyResponseSchema,
+  normalizePublishCapInput,
+  normalizeSpendCapInput,
+} from './agent-policy.js';
+export type {
+  AgentPolicyError,
+  AgentPolicyMutationRequest,
+  AgentPolicyResponse,
+} from './agent-policy.js';
+export {
   agentModeSchema,
   DEFAULT_AGENT_MODE,
   effectiveAgentPolicySchema,

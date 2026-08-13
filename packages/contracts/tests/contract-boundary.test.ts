@@ -54,7 +54,12 @@ describe('the contracts package stays dependency-pure', () => {
     const importPattern = /from\s+['"]([^'"]+)['"]/g;
 
     for (const file of sourceFiles()) {
-      const source = readFileSync(path.join(SRC, file), 'utf8');
+      // Comments are stripped first. The pattern is loose enough that ordinary
+      // prose - `indistinguishable from "leave it alone"` - would otherwise
+      // read as an import specifier and fail the build on a doc edit.
+      const source = readFileSync(path.join(SRC, file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
       for (const match of source.matchAll(importPattern)) {
         const specifier = match[1] ?? '';
         const allowed = specifier === 'zod' || specifier.startsWith('./');

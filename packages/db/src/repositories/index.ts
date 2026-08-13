@@ -63,6 +63,13 @@ export {
 } from './policy.js';
 export type { EffectiveAgentPolicyRow, PolicyReadRepository } from './policy.js';
 
+export { createPolicyMutationService, MissingPolicyStateError } from './policy-mutation.js';
+export type {
+  AgentPolicyValues,
+  CommittedAgentPolicy,
+  PolicyMutationService,
+} from './policy-mutation.js';
+
 export { createPrecheckReceiptRepository } from './receipts.js';
 export type { PrecheckReceiptRepository } from './receipts.js';
 
