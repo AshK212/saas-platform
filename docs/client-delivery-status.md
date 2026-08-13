@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 13 — authenticated operator policy mutation).
+Last updated: **2026-08-13** (Step 14 — authoritative UTC-day ledger foundation).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -121,7 +121,16 @@ confirmed against a real client-owned Neon project:
   same-agent race leaves one complete policy rather than a mix of fields, and
   that a failure in either half rolls the other back. Single-threaded JavaScript
   makes an increment atomic for free; PostgreSQL does not. **Every concurrency
-  guarantee in Step 13 is argued and tested-but-unrun.**
+  guarantee in Step 13 is argued and tested-but-unrun**;
+- the **eighteen Step 14 live ledger tests**, currently **skipped**. These prove
+  the claim every later spend and publish cap rests on: that
+  `SELECT … FOR UPDATE` genuinely makes a second transaction WAIT rather than
+  read stale committed usage. Also unproven without them: that two concurrent
+  first-actions of a UTC day yield exactly one row, that locks on different
+  agents and different days do not block one another, that `numeric(14,6)`
+  round-trips an exact decimal, and that the composite foreign key refuses a
+  cross-tenant agent. **Without a test database, the serialization that makes a
+  correct cap denial possible has never actually been observed.**
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
@@ -227,6 +236,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
-| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05, AC-06, AC-13**, policy provisioning atomicity, policy-mutation concurrency, and AC-20 cross-tenant isolation — 92 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05, AC-06, AC-13**, policy provisioning atomicity, policy-mutation concurrency, **ledger row-lock serialization**, and AC-20 cross-tenant isolation — 110 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
 | Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

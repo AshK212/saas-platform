@@ -260,6 +260,7 @@ describe('every repository source file scopes its queries', () => {
     'api-credentials.ts',
     'blocks.ts',
     'events.ts',
+    'ledger.ts',
     'policy-mutation.ts',
   ];
 
@@ -314,7 +315,13 @@ describe('every repository source file scopes its queries', () => {
 
     // Scope must arrive as a WorkspaceScope, never as a bare string a caller
     // could set to any tenant.
-    expect(source).not.toMatch(/workspaceId\s*:\s*string/);
+    //
+    // Matched in PARAMETER position (`workspaceId: string,` / `: string)`)
+    // rather than anywhere. A returned row may legitimately carry a
+    // `readonly workspaceId: string;` field - echoing back the tenant the
+    // caller already proved cannot re-target anything. The loose form would
+    // flag every repository that returns a row.
+    expect(source).not.toMatch(/workspaceId\s*:\s*string\s*[,)]/);
   });
 });
 
@@ -579,6 +586,216 @@ describe('mutation surface stays narrow and scoped', () => {
     // exclude each other on the same event.
     expect(code).not.toMatch(/Math\.random|Date\.now|process\.(pid|env)|randomUUID/);
     expect(code).toContain("createHash('sha256')");
+  });
+
+  it('LEDGER MUTATION REQUIRES A LOCKED CAPABILITY', () => {
+    // THE Step 14 correction. An earlier revision exposed
+    // `commitSpend(agentId, day, amount)` directly on the repository, callable
+    // without ever locking - a read-modify-write with no serialization, which
+    // is exactly the lost-update race the module exists to prevent.
+    //
+    // Correct sequencing must not rest on developer discipline, so the
+    // mutation functions must not exist until the lock has been acquired.
+    const repository = repositories.createLedgerRepository(
+      {} as never,
+      { workspaceId: 'x' } as never,
+    ) as unknown as Record<string, unknown>;
+
+    // The repository surface is a read and a lock. Nothing more.
+    expect(Object.keys(repository).sort()).toEqual(['findDailyLedger', 'lockDailyLedger']);
+    expect(repository['commitSpend']).toBeUndefined();
+    expect(repository['commitPublish']).toBeUndefined();
+  });
+
+  it('no standalone commit function is exported from either entry point', () => {
+    // A free function would be a second way in, bypassing the capability.
+    for (const [label, moduleExports] of [
+      ['@hybrid/db root', dbPackage],
+      ['repositories', repositories],
+    ] as const) {
+      for (const name of Object.keys(moduleExports)) {
+        expect(name, `${label} exports ${name}`).not.toMatch(
+          /^(commitSpend|commitPublish|mutateLedger|addSpend|incrementPublish)$/,
+        );
+      }
+    }
+  });
+
+  it('no exported ledger query builder can mutate committed usage', () => {
+    // `ledgerQueries` is exported so architecture tests can render SQL. Those
+    // builders are awaitable, so none of them may be a usage mutation.
+    const builders = Object.keys(repositories.ledgerQueries).sort();
+    expect(builders).toEqual(['find', 'findScopedAgent', 'insertIfAbsent', 'lockForUpdate']);
+
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const exportedBlock = /export const ledgerQueries = \{[\s\S]*?\n\} as const;/.exec(source);
+    expect(exportedBlock).not.toBeNull();
+    // `insertIfAbsent` can only create a zero row; an UPDATE here could alter
+    // committed accounting without a lock.
+    expect(exportedBlock?.[0]).not.toContain('.update(');
+  });
+
+  it('the mutation methods take no workspace, agent or day argument', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The key is CAPTURED by the capability, never re-passed. A caller cannot
+    // retarget another agent or day, which removes an entire class of
+    // mismatched-key bugs.
+    expect(code).toMatch(/commitSpend\(amountUsd: string\)/);
+    expect(code).toMatch(/commitPublish\(count = 1\)|commitPublish\(count\?: number\)/);
+    expect(code).not.toMatch(/commitSpend\([^)]*agentId/);
+    expect(code).not.toMatch(/commitPublish\([^)]*agentId/);
+    expect(code).not.toMatch(/commitSpend\([^)]*day/);
+  });
+
+  it('THE LEDGER OPENS NO TRANSACTION OF ITS OWN', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // A hidden second transaction would be catastrophic: the Step 15 decision
+    // service holding a row lock would find its ledger write committing on a
+    // different connection, so the lock would protect nothing and the receipt
+    // could commit while the debit rolled back.
+    expect(code).not.toMatch(/\.transaction\(/);
+    // Every primitive composes into the CALLER's executor.
+    expect(code).toContain('executor: DatabaseExecutor');
+    // And the locked capability reuses that same executor rather than
+    // acquiring a second client or pool connection of its own.
+    expect(code).not.toMatch(/createDatabaseClient|createDatabasePool|\.connect\(/);
+    expect(code).toMatch(/await executor\s*\n?\s*\.update\(ledgerDaily\)/);
+  });
+
+  it('the accounting modules acquire no connection either', () => {
+    for (const file of ['money.ts', 'utc-day.ts']) {
+      const code = readFileSync(path.join(PACKAGE_ROOT, 'src', 'accounting', file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+
+      // Pure arithmetic and date derivation - no database access at all.
+      expect(code, file).not.toMatch(
+        /\.transaction\(|createDatabaseClient|createDatabasePool|\.connect\(/,
+      );
+    }
+  });
+
+  it('the ledger imports no policy, event, receipt or block table', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Accounting is a separate concern from governance and from audit. Step 15
+    // combines them; the ledger must not pre-empt that.
+    for (const forbidden of [
+      'agentPolicies',
+      'workspacePolicyState',
+      'precheckReceipts',
+      'blocks',
+      'events',
+    ]) {
+      expect(code, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it('THE LEDGER HAS NO RESET, CLEAR OR DELETE', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Committed accounting is evidence. An application-level erase would let a
+    // cap breach be made to disappear.
+    expect(code).not.toMatch(/\.delete\(/);
+    expect(code).not.toMatch(/\b(resetLedger|clearUsage|deleteLedger|zeroUsage|setSpend)\b/i);
+  });
+
+  it('the ledger performs no float arithmetic', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).not.toMatch(/parseFloat|toFixed|Number\(/);
+    // Capacity is checked in exact micro-dollar integers before the write, so
+    // the caller gets a typed error rather than a driver overflow.
+    expect(code).toContain('parseUsdToMicros');
+    expect(code).toContain('addMicros');
+    // The addition itself happens in PostgreSQL `numeric`, which is exact and
+    // makes the statement atomic on its own - defense in depth behind the row
+    // lock, and no JavaScript read-modify-write of an authoritative amount.
+    expect(code).toMatch(/\$\{ledgerDaily\.spendCommittedUsd\} \+ \$\{amountUsd\}::numeric/);
+    // Every value leaving the module is normalised to the canonical form.
+    expect(code).toContain('normalizeUsd');
+  });
+
+  it('the accounting module uses no local-time API', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'accounting', 'utc-day.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Every one of these reads the HOST timezone, which would make the
+    // accounting day depend on where the server happens to run.
+    for (const forbidden of [
+      'getFullYear',
+      'getMonth',
+      'getDate',
+      'getHours',
+      'toLocaleDateString',
+      'toLocaleString',
+      'Intl',
+      'getTimezoneOffset',
+    ]) {
+      expect(code, forbidden).not.toContain(forbidden);
+    }
+    expect(code).toContain('toISOString');
+  });
+
+  it('EXACTLY ONE file writes the ledger table', () => {
+    // Source-level sweep across both packages, catching a deep import too.
+    const roots = [
+      path.join(PACKAGE_ROOT, 'src'),
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps'),
+    ];
+    const PERMITTED = path.join('repositories', 'ledger.ts');
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        if (full.endsWith(PERMITTED)) continue;
+        if (full.includes(`${path.sep}tests${path.sep}`)) continue;
+
+        const code = readFileSync(full, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, '');
+
+        if (/\.(insert|update|delete)\([\s]*ledgerDaily/.test(code)) {
+          offenders.push(full);
+        }
+      }
+    };
+    for (const root of roots) walk(root);
+
+    expect(offenders, 'only the ledger repository may write ledger_daily').toEqual([]);
+  });
+
+  it('POLICY MUTATION WRITES NO LEDGER; THE LEDGER WRITES NO POLICY', () => {
+    // The separation AC-10 depends on: raising a cap from $25 to $100 must not
+    // reset today's committed spend, and lowering it must not reduce usage.
+    // Policy and accounting are independent state.
+    const policyMutation = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'policy-mutation.ts'),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const ledger = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'ledger.ts'),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(policyMutation).not.toContain('ledgerDaily');
+    expect(policyMutation).not.toContain('ledger_daily');
+    expect(ledger).not.toContain('agentPolicies');
+    expect(ledger).not.toContain('workspacePolicyState');
   });
 
   it('THE POLICY REPOSITORY HAS NO WRITER', () => {

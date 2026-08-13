@@ -2,23 +2,25 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 13, operator policy mutation.**
+**Current phase: Credit — Step 14, authoritative UTC-day ledger.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
 the agent registry, idempotent event ingest via `POST /v1/events`, the operator
 event timeline with raw JSON drill-through, machine policy polling via
-`GET /v1/policy`, and operator policy configuration with atomic versioning.
+`GET /v1/policy`, operator policy configuration with atomic versioning, and the
+authoritative per-agent UTC-day ledger with exact micro-dollar arithmetic.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
-ledger, no precheck, no enforcement, no exports, rollups, sharing or demo.
-**Being signed in grants access to no workspace** — tenant access comes only
-from a membership, re-proven on every request.
+precheck, no enforcement, no exports, rollups, sharing or demo. **Being signed
+in grants access to no workspace** — tenant access comes only from a membership,
+re-proven on every request.
 
-> **Policy is configurable, not enforced.** An operator can set a mode, a spend
-> cap and a publish cap, and an agent will receive them within one poll. Nothing
-> stops a paused agent, and no cap denies anything — enforcement arrives with
-> precheck. See [policy](docs/policy.md).
+> **Policy is configurable and usage is accountable, but nothing is enforced.**
+> An operator can set a mode and caps, and an agent receives them within one
+> poll. The ledger can record and serialize committed spend. **No cap is
+> compared to anything and no action is ever denied** — the decision engine
+> arrives with precheck. See [policy](docs/policy.md) and [ledger](docs/ledger.md).
 
 > **Machine keys write; browser sessions read.** `POST /v1/events` accepts only
 > a bearer API key. The timeline accepts only a session cookie. A machine that
@@ -249,6 +251,7 @@ behind that prefix.
 - [API authentication](docs/api-authentication.md) — API-key format, hashing, revocation
 - [Event contracts](docs/event-contracts.md) — ingest transport, replay idempotency, and the timeline / raw-detail read surface
 - [Policy](docs/policy.md) — workspace policy versioning, effective defaults, agent polling, and atomic operator mutation
+- [Ledger](docs/ledger.md) — the authoritative UTC-day ledger, exact micro-dollar arithmetic, and row-lock serialization
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -257,11 +260,11 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 13: cap, publish and pause
-*enforcement*, prechecks and receipts, the ledger and any spend accounting,
-plane-owned blocks, CSV/JSON export, daily rollups and charts, gone-dark
-detection, share links, the public demo, simulator scenarios, and any
-Hermes/OpenClaw runtime integration.
+The following are **deliberately absent** as of Step 14: prechecks and
+allow/deny decisions, receipts, plane-owned blocks, cap/publish/pause
+*enforcement*, event-driven spend debit, CSV/JSON export, daily rollups and
+charts, gone-dark detection, share links, the public demo, simulator scenarios,
+and any Hermes/OpenClaw runtime integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

@@ -13,6 +13,7 @@
  *   src/redact.ts       - credential redaction for diagnostics
  *   src/migrate.ts      - migration runner CLI (runtime dependencies only)
  *   src/schema/         - Drizzle table definitions
+ *   src/accounting/     - exact money arithmetic and the UTC accounting day
  *   src/repositories/   - workspace-SCOPED data access (every method needs a scope)
  *   src/resolvers/      - READ-ONLY; establish which workspace a caller may enter
  *   src/provisioning/   - tenant creation; the only writes outside identity/
@@ -31,11 +32,36 @@
  * `db.select().from(events)` with no workspace predicate is exactly the
  * cross-tenant leak this package exists to prevent.
  *
- * STEP 4 SCOPE
- * ------------
- * Data-access isolation architecture. Reads only, and only enough to prove the
- * pattern. No authentication, no ingest, no policy, no ledger, no enforcement.
+ * STEP 14 SCOPE
+ * -------------
+ * Adds the authoritative accounting primitives: exact micro-dollar arithmetic,
+ * the UTC accounting day, and the workspace/agent/day ledger with its row-lock
+ * concurrency primitive.
+ *
+ * DECISIONS ARE NOT HERE. Nothing compares a cap to committed usage, allows or
+ * denies an action, writes a receipt or creates a block. Those compose these
+ * primitives in Step 15.
  */
+
+// Authoritative accounting primitives
+export {
+  addMicros,
+  formatUsdFromMicros,
+  LedgerCapacityError,
+  MAX_USD_MICROS,
+  MICROS_PER_USD,
+  MoneyError,
+  normalizeUsd,
+  parseUsdToMicros,
+  remainingCount,
+  remainingMicros,
+} from './accounting/money.js';
+export {
+  parseUtcAccountingDay,
+  toUtcAccountingDay,
+  UtcAccountingDayError,
+} from './accounting/utc-day.js';
+export type { UtcAccountingDay } from './accounting/utc-day.js';
 
 // Connection and lifecycle
 export {
@@ -78,6 +104,10 @@ export {
   createBlockRepository,
   createEventRepository,
   createIngestLockRepository,
+  createLedgerRepository,
+  ledgerQueries,
+  ledgerScopePredicate,
+  LedgerRowMissingError,
   createPolicyMutationService,
   createPolicyReadRepository,
   createPrecheckReceiptRepository,
@@ -105,6 +135,9 @@ export type {
   ResolveRuntimeBlockInput,
   AgentPolicyValues,
   CommittedAgentPolicy,
+  DailyLedgerState,
+  LedgerRepository,
+  LockedDailyLedger,
   DatabaseTransaction,
   EffectiveAgentPolicyRow,
   PolicyMutationService,

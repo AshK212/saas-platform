@@ -51,6 +51,9 @@ export type {
   TimelineEventRow,
 } from './events.js';
 
+export { createLedgerRepository, ledgerQueries, ledgerScopePredicate, LedgerRowMissingError } from './ledger.js';
+export type { DailyLedgerState, LedgerRepository, LockedDailyLedger } from './ledger.js';
+
 export { createIngestLockRepository } from './ingest-locks.js';
 export type { EventLockRequest, IngestLockRepository } from './ingest-locks.js';
 export { compareLockKeys, eventIngestLockKey } from './lock-keys.js';
