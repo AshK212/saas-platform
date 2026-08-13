@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'reac
 import { Agents } from './Agents';
 import { createWorkspace, listWorkspaces, openWorkspace } from './api';
 import { ApiKeys } from './ApiKeys';
+import { Timeline } from './Timeline';
 
 /**
  * Workspace selection and creation.
@@ -14,9 +15,9 @@ import { ApiKeys } from './ApiKeys';
  * localStorage, and even if it were, it would grant nothing: the server
  * re-proves membership on every request. Nothing the browser holds is trusted.
  *
- * STEP 6 SCOPE: create, list, open. No dashboard, no agents, no timeline, no
- * policy - opening a workspace deliberately shows only that authorization
- * succeeded.
+ * STEP 11 SCOPE: create, list, open, and - once open - the agent roster, the
+ * event timeline with raw drill-through, and API credentials. No policy, no
+ * spend controls, no exports and no charts.
  */
 
 type LoadState =
@@ -147,11 +148,15 @@ export function Workspaces(): JSX.Element {
               Authorized for <span className="font-medium">{selected.name}</span> as{' '}
               {selected.role}.
             </p>
-            <p className="mt-1 text-slate-500">Agents, events and policy arrive in later steps.</p>
+            <p className="mt-1 text-slate-500">Policy and spend controls arrive in later steps.</p>
           </div>
 
           <div className="border-t border-slate-800 pt-5">
             <Agents key={`agents-${selected.id}`} workspaceId={selected.id} />
+          </div>
+
+          <div className="border-t border-slate-800 pt-5">
+            <Timeline key={`timeline-${selected.id}`} workspaceId={selected.id} />
           </div>
 
           <div className="border-t border-slate-800 pt-5">

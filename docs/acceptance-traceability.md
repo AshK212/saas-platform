@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-12** (Step 10 — `POST /v1/events` and idempotent ingest).
+Last updated: **2026-08-12** (Step 11 — event timeline and raw event detail).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -39,8 +39,8 @@ only and does not redefine any criterion.
 | AC-02 | Workspace + API key | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both halves now exist.** Step 6: workspace creation with atomic creator membership, membership-bounded listing, per-request authorization producing a trusted `WorkspaceScope`. Step 7: operator-only issuance of `hmp_live_*` keys with 256-bit secrets, SHA-256 hash-at-rest, plaintext shown exactly once, immediate revocation, and bearer authentication that derives the workspace from the credential row. 118 credential tests pass and the flow was exercised end to end over real HTTP. **NOT PASS:** no client Neon, Resend or staging exists, so the acceptance behaviour has never run in an authorized environment. |
 | AC-03 | Documented simulator / reference command | CREDIT — baseline | `FOUNDATION ONLY` | `apps/simulator` exists, compiles, and runs as an executable skeleton. No acceptance command is documented and no scenario is implemented. |
 | AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
-| AC-05 | Timeline + agent filter | CREDIT — functional | `NOT STARTED` | None. The web app is an empty shell by design. |
-| AC-06 | Raw JSON event detail | CREDIT | `FOUNDATION ONLY` | **Step 10 began writing the data this criterion displays**: the entire validated event is stored verbatim in `events.payload`, which is the drill-through source. It is stored from the *validated* object rather than raw request bytes, so no credential or header material can reach the audit record. **No read path exists** — there is no timeline, no detail API and no UI; `GET /v1/events` returns 404, asserted by test. Step 11 owns the read surface. |
+| AC-05 | Timeline + agent filter | CREDIT — functional | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 implemented both halves.** `GET /v1/workspaces/:id/events` returns the workspace stream newest-first by server `received_at` with `id` as a deterministic tiebreaker, bounded pages (default 50, max 100) and opaque `(received_at, id)` cursor pagination that neither repeats nor skips rows. Per-agent filtering resolves the **external** `agent_id` inside the authorized workspace, so a shared `agent-1` cannot cross tenants; an unknown id returns an empty page rather than revealing existence. Browser-session auth only — an API key is refused. A functional operator UI lists events, filters by agent, and loads more. 66 route tests, 24 cursor tests, 25 compiled-SQL tests. **NOT PASS:** never demonstrated in an authorized environment, and the live PostgreSQL suite that proves real ordering, tiebreak and cursor behaviour is **SKIPPED**. |
+| AC-06 | Raw JSON event detail | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 completed the drill-through.** `GET /v1/workspaces/:id/events/:eventId` returns the event plus `raw` — the validated event object exactly as Step 10 stored it in `events.payload`, nested structure intact. `raw` is the **validated object, not raw HTTP request data**, which is why no credential or header material can appear in it. The UI renders it via `JSON.stringify(raw, null, 2)` in a `<pre>` as a React text child; a payload containing `<script>` displays as text and there is no `dangerouslySetInnerHTML` in the app. A malformed, unknown or foreign event id is uniformly 404. **NOT PASS:** never demonstrated in an authorized environment, and the live test asserting byte-for-byte `jsonb` round-tripping is **SKIPPED**. |
 | AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `NOT STARTED` | None. |
 | AC-08 | $41 over-cap denial + block/receipt | CREDIT | `NOT STARTED` | None. |
 | AC-09 | Immediate block email | LATER | `DEFERRED` | Out of Credit phase. |
@@ -54,7 +54,7 @@ only and does not redefine any criterion.
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-18 | Revocable read-only share link | CREDIT | `NOT STARTED` | None. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
-| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **797 tests, 28 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
+| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **965 tests, 33 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
 
 ---
@@ -195,19 +195,41 @@ the first authenticated browser mutation. See
 AC-02 moves to `PARTIAL`, not `PASS`: API-key issuance is Step 7, and nothing
 has been demonstrated on staging.
 
-## Summary at Step 10
+## Step 11 note: timeline and raw detail
+
+Step 11 added the operator read surface and nothing else. It writes nothing, and
+Step 10's corrected ingest ordering is untouched — the read path lives in a
+separate store and route module with no method that could mutate an event.
+
+Three decisions carry weight for later acceptance:
+
+- **`received_at DESC, id DESC`.** A client clock never determines ordering, and
+  the `id` tiebreaker is what makes cursor pagination safe across the block of
+  identical timestamps that one ingest batch produces.
+- **The cursor carries no tenancy.** It is client-held and therefore
+  attacker-controlled; scope comes only from membership, so a forged cursor can
+  at worst move the caller's own page boundary. Tested by replaying a genuine
+  cursor from another workspace.
+- **An unknown agent filter returns an empty page, not 404.** A 404 would reveal
+  whether an external agent id exists elsewhere on the platform.
+
+AC-05 and AC-06 both move to `IMPLEMENTED / STAGING VERIFICATION BLOCKED` —
+**not PASS**. Neither has run against real PostgreSQL or in a staging
+environment.
+
+## Summary at Step 11
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **4** (AC-01, AC-02, AC-04, AC-13)
-- `FOUNDATION ONLY`: **3** (AC-03, AC-06, AC-20)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **6** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-13)
+- `FOUNDATION ONLY`: **2** (AC-03, AC-20)
 - `BLOCKED`: **1** (AC-21)
-- `NOT STARTED`: **8**
+- `NOT STARTED`: **6**
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
-Resend and Render. Four criteria are now code-complete and waiting only on an
+Resend and Render. **Six** criteria are now code-complete and waiting only on an
 authorized environment — that queue is the single largest risk to the delivery
-date, and it grows with every step.
+date, and it has grown at every step since Step 5.
 
 ## Step 3 note: relational foundation per criterion
 

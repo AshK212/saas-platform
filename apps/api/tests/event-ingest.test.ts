@@ -17,6 +17,7 @@ import { MAX_EVENT_BODY_BYTES } from '../src/routes/events';
 import { createMemoryAgentStore, type MemoryAgentStore } from './helpers/memory-agent-store';
 import { createMemoryApiKeyStore, type MemoryApiKeyStore } from './helpers/memory-api-key-store';
 import { createMemoryAuthStore, type MemoryAuthStore } from './helpers/memory-auth-store';
+import { createMemoryEventReadStore } from './helpers/memory-event-read-store';
 import { createMemoryEventStore, type MemoryEventStore } from './helpers/memory-event-store';
 import {
   createMemoryWorkspaceStore,
@@ -60,6 +61,9 @@ beforeEach(() => {
     apiKeyStore: apiKeys,
     agentStore: agents,
     eventStore,
+    // Wired so the "a key cannot read the timeline" assertion exercises the
+    // real authentication path rather than passing on an unconfigured 503.
+    eventReadStore: createMemoryEventReadStore(),
     clock,
   });
 });
@@ -717,20 +721,29 @@ describe('unavailable without a database', () => {
   });
 });
 
-describe('no read surface was added', () => {
-  it('does not expose an event timeline or detail route', async () => {
+describe('the ingest path stays write-only', () => {
+  it('exposes no GET on the ingest path itself', async () => {
     const t = await tenant('op@example.test', 'Acme');
     await ingest(t.key, { events: [hb('e1')] });
 
-    // Step 11 owns the read path.
-    for (const path of [
-      `/v1/workspaces/${t.workspaceId}/events`,
-      `${EVENT_INGEST_PATH}/e1`,
-      EVENT_INGEST_PATH,
-    ]) {
+    // Step 11 added the READ surface under /v1/workspaces/:id/events, which is
+    // operator-authenticated. The machine ingest path gained nothing.
+    for (const path of [EVENT_INGEST_PATH, `${EVENT_INGEST_PATH}/e1`]) {
       const response = await app.request(path, { headers: { cookie: t.cookie } });
       expect(response.status, path).toBe(404);
     }
+  });
+
+  it('an ingest API key cannot read the workspace timeline', async () => {
+    const t = await tenant('op@example.test', 'Acme');
+    await ingest(t.key, { events: [hb('e1')] });
+
+    const response = await app.request(`/v1/workspaces/${t.workspaceId}/events`, {
+      headers: { authorization: `Bearer ${t.key}` },
+    });
+
+    // The domains stay separate: machine keys write, browser sessions read.
+    expect(response.status).toBe(401);
   });
 
   it('registration still works alongside ingest', async () => {

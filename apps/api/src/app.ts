@@ -5,9 +5,11 @@ import type { AgentStore } from './agents/store.js';
 import type { ApiKeyStore } from './api-keys/store.js';
 import { systemClock, type Clock } from './auth/clock.js';
 import type { AuthService } from './auth/service.js';
+import type { EventReadStore } from './events/read-store.js';
 import type { EventIngestStore } from './events/store.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createEventRoutes } from './routes/events.js';
+import { createTimelineRoutes } from './routes/timeline.js';
 import { createApiKeyRoutes } from './routes/api-keys.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -72,6 +74,15 @@ export interface AppDependencies {
    */
   readonly eventStore?: EventIngestStore | undefined;
 
+  /**
+   * Event timeline reads. `undefined` when the database is unconfigured -
+   * those routes then answer 503 while liveness stays unaffected.
+   *
+   * Separate from `eventStore`: ingest is machine-authenticated and writes,
+   * this is operator-authenticated and only reads.
+   */
+  readonly eventReadStore?: EventReadStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -79,12 +90,14 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 10 SCOPE
+ * STEP 11 SCOPE
  * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
- * workspace API credentials, the agent registry, and idempotent event INGEST.
- * Event READ surfaces (timeline, raw detail), policies, prechecks, ledger,
- * receipts, sharing and demo are intentionally absent.
+ * workspace API credentials, the agent registry, idempotent event INGEST, and
+ * the operator event TIMELINE and raw event detail.
+ *
+ * Policies, prechecks, ledger, receipts, exports, rollups, sharing and demo are
+ * intentionally absent.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -169,6 +182,14 @@ export function createApp(dependencies: AppDependencies): Hono {
       eventStore: dependencies.eventStore,
       apiKeyStore: dependencies.apiKeyStore,
       clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createTimelineRoutes({
+      eventReadStore: dependencies.eventReadStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
     }),
   );
 

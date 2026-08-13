@@ -64,6 +64,32 @@ export type {
   ValidationIssue,
 } from './events.js';
 export {
+  eventAgentRefSchema,
+  eventBlockRefSchema,
+  eventDetailResponseSchema,
+  eventDetailSchema,
+  eventSummarySchema,
+  MAX_CURSOR_LENGTH,
+  TIMELINE_AGENT_PARAM,
+  TIMELINE_CURSOR_PARAM,
+  TIMELINE_DEFAULT_LIMIT,
+  TIMELINE_LIMIT_PARAM,
+  TIMELINE_MAX_LIMIT,
+  timelineQuerySchema,
+  timelineResponseSchema,
+  workspaceEventPath,
+  workspaceEventsPath,
+} from './timeline.js';
+export type {
+  EventAgentRef,
+  EventBlockRef,
+  EventDetail,
+  EventDetailResponse,
+  EventSummary,
+  TimelineQuery,
+  TimelineResponse,
+} from './timeline.js';
+export {
   AGENT_REGISTER_PATH,
   agentListResponseSchema,
   agentResponseSchema,

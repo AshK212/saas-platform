@@ -2,16 +2,21 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 10, event ingest.**
+**Current phase: Credit — Step 11, event timeline.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
-the agent registry, and idempotent event ingest via `POST /v1/events`.
+the agent registry, idempotent event ingest via `POST /v1/events`, and the
+operator event timeline with raw JSON drill-through.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
-policy, ledger, precheck, timeline, sharing or demo. **Being signed in grants
-access to no workspace** — tenant access comes only from a membership, re-proven
-on every request.
+policy, ledger, precheck, exports, rollups, sharing or demo. **Being signed in
+grants access to no workspace** — tenant access comes only from a membership,
+re-proven on every request.
+
+> **Machine keys write; browser sessions read.** `POST /v1/events` accepts only
+> a bearer API key. The timeline accepts only a session cookie. A machine that
+> can submit events cannot read the tenant's history back.
 
 > **Ingest records; it does not account.** A `spend.recorded` event is stored as
 > an audit record and debits no budget. Authoritative spend accounting is a
@@ -236,7 +241,7 @@ behind that prefix.
 - [Architecture](docs/architecture.md) — foundation, boundaries and invariants
 - [Authentication](docs/authentication.md) — magic-link flow, cookies, CORS, limits
 - [API authentication](docs/api-authentication.md) — API-key format, hashing, revocation
-- [Event contracts](docs/event-contracts.md) — `POST /v1/events` transport, ingest algorithm and replay idempotency
+- [Event contracts](docs/event-contracts.md) — ingest transport, replay idempotency, and the timeline / raw-detail read surface
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -245,11 +250,11 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 10: reading events back
-(timeline and raw-event detail), policies and modes, spend and publish caps,
-prechecks and receipts, the ledger and any spend accounting, plane-owned blocks,
-pause enforcement, share links, the public demo, simulator scenarios, and any
-Hermes/OpenClaw runtime integration.
+The following are **deliberately absent** as of Step 11: policies and modes,
+spend and publish caps, prechecks and receipts, the ledger and any spend
+accounting, plane-owned blocks, pause enforcement, CSV/JSON export, daily
+rollups and charts, gone-dark detection, share links, the public demo, simulator
+scenarios, and any Hermes/OpenClaw runtime integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

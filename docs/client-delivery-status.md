@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 10 — `POST /v1/events` and idempotent ingest).
+Last updated: **2026-08-12** (Step 11 — event timeline and raw event detail).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -97,16 +97,24 @@ confirmed against a real client-owned Neon project:
   claim about what **PostgreSQL** does under concurrency, and the correctness
   of ingest now rests on a `pg_advisory_xact_lock` that **no in-process test
   can exercise at all**. Single-threaded JavaScript makes a read-then-act
-  sequence authoritative for free; PostgreSQL does not.
+  sequence authoritative for free; PostgreSQL does not;
+- the **thirteen Step 11 live timeline tests**, currently **skipped**. These
+  prove **AC-05** and **AC-06** against real PostgreSQL: that
+  `ORDER BY received_at DESC, id DESC` is a total order over rows sharing a
+  timestamp, that the row-value cursor boundary pages a static dataset without
+  repeating or skipping rows (including when *every* timestamp is identical),
+  that `jsonb` returns a stored payload byte-for-byte, and that the workspace
+  predicate isolates tenants at runtime. The in-memory read store sorts and
+  slices in JavaScript and cannot establish any of it.
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Four criteria are now code-complete and blocked only on environment**
-(AC-01, AC-02, AC-04, AC-13). That queue grows with every step, and each
-addition increases the chance that the first real run against Neon surfaces
-several problems at once rather than one at a time. This is the primary
+**Six criteria are now code-complete and blocked only on environment**
+(AC-01, AC-02, AC-04, AC-05, AC-06, AC-13). That queue grows with every step,
+and each addition increases the chance that the first real run against Neon
+surfaces several problems at once rather than one at a time. This is the primary
 schedule risk on the project.
 
 Local structural validation passes. That is **not** production Neon validation
@@ -203,6 +211,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
-| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-13** replay idempotency and AC-20 cross-tenant isolation — 44 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05, AC-06, AC-13** and AC-20 cross-tenant isolation — 62 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
 | Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

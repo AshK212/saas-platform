@@ -15,8 +15,16 @@ import {
   type ApiKeySummary,
   type IssuedApiKey,
   currentUserResponseSchema,
+  eventDetailResponseSchema,
   magicLinkRequestSchema,
   magicLinkResponseSchema,
+  TIMELINE_AGENT_PARAM,
+  TIMELINE_CURSOR_PARAM,
+  timelineResponseSchema,
+  workspaceEventPath,
+  workspaceEventsPath,
+  type EventDetail,
+  type TimelineResponse,
   workspaceListResponseSchema,
   workspacePath,
   workspaceResponseSchema,
@@ -136,6 +144,66 @@ export async function listAgents(workspaceId: string): Promise<AgentSummary[]> {
     throw new Error('Unexpected response from the server.');
   }
   return parsed.data.agents;
+}
+
+/**
+ * Fetches one page of the workspace event timeline (AC-05).
+ *
+ * FILTERING HAPPENS ON THE SERVER. The agent id is sent as a query parameter
+ * and resolved inside the authorized workspace. Fetching every event and
+ * filtering in the browser would not scale, would leak nothing but would show
+ * the operator a partial page as though it were complete, and would defeat the
+ * bounded-page design entirely.
+ */
+export async function fetchTimeline(
+  workspaceId: string,
+  options: { agentId?: string | undefined; cursor?: string | undefined } = {},
+): Promise<TimelineResponse> {
+  const params = new URLSearchParams();
+  if (options.agentId !== undefined && options.agentId !== '') {
+    params.set(TIMELINE_AGENT_PARAM, options.agentId);
+  }
+  if (options.cursor !== undefined && options.cursor !== '') {
+    params.set(TIMELINE_CURSOR_PARAM, options.cursor);
+  }
+
+  const query = params.toString();
+  const path = `${workspaceEventsPath(workspaceId)}${query === '' ? '' : `?${query}`}`;
+
+  const response = await fetch(path, { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error('Could not load events.');
+  }
+
+  const parsed = timelineResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data;
+}
+
+/**
+ * Fetches one event including its raw validated payload (AC-06).
+ *
+ * `eventId` is the INTERNAL uuid carried by timeline rows, not the
+ * client-supplied `event_id`.
+ */
+export async function fetchEventDetail(
+  workspaceId: string,
+  eventId: string,
+): Promise<EventDetail> {
+  const response = await fetch(workspaceEventPath(workspaceId, eventId), {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new Error('Could not load that event.');
+  }
+
+  const parsed = eventDetailResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.event;
 }
 
 /** Lists a workspace's API credentials. Safe metadata only - never a key. */

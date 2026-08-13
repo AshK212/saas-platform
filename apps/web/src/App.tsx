@@ -106,7 +106,7 @@ export function App(): JSX.Element {
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6 py-16">
         <header className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
-            Credit Phase &middot; Step 6 Workspace Authorization
+            Credit Phase &middot; Step 11 Event Timeline
           </p>
           <h1 className="text-3xl font-semibold tracking-tight">{PLATFORM_NAME}</h1>
         </header>

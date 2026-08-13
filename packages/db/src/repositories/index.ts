@@ -41,7 +41,15 @@ export { createBlockRepository } from './blocks.js';
 export type { BlockRepository, BlockRow, ResolveRuntimeBlockInput } from './blocks.js';
 
 export { createEventRepository, eventQueries, eventScopePredicate } from './events.js';
-export type { EventRepository, EventRow, InsertEventInput } from './events.js';
+export type {
+  EventDetailRow,
+  EventRepository,
+  EventRow,
+  InsertEventInput,
+  ListTimelineOptions,
+  TimelineCursor,
+  TimelineEventRow,
+} from './events.js';
 
 export { createIngestLockRepository } from './ingest-locks.js';
 export type { EventLockRequest, IngestLockRepository } from './ingest-locks.js';

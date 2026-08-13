@@ -459,7 +459,154 @@ data.
 
 ---
 
-## Not implemented in Step 10
+## The read surface (Step 11 — AC-05, AC-06)
+
+```http
+GET /v1/workspaces/:workspaceId/events
+GET /v1/workspaces/:workspaceId/events/:eventId
+```
+
+**Browser sessions read; machine keys write.** These routes consult only the
+session cookie — an API key is never accepted, not even as a fallback. A machine
+that can submit events cannot read the tenant's history back. Tests assert both
+directions.
+
+Authorization is the operator chain, re-proven per request:
+
+```text
+session cookie → AuthenticatedUser → membership → AuthorizedWorkspace
+              → WorkspaceScope → event repository
+```
+
+Any workspace **member** may read. Events are ordinary tenant data, unlike API
+keys, which are operator-only because they are secret-adjacent — the same rule
+already applied to the agent roster.
+
+### Timeline
+
+| Query param | Notes |
+| --- | --- |
+| `agent_id` | External agent id, resolved **inside** the authorized workspace |
+| `limit` | Default **50**, maximum **100**. `0`, negatives, fractions, `1e3` and non-numerics are 400 — never silently clamped |
+| `cursor` | Opaque; pass back unmodified |
+
+```jsonc
+{
+  "events": [
+    { "id": "…", "eventId": "evt-123",
+      "agent": { "id": "…", "agentId": "agent-a", "name": "Agent A" },
+      "type": "heartbeat", "category": null,
+      "occurredAt": null, "receivedAt": "…",
+      "precheckId": null, "block": null }
+  ],
+  "nextCursor": "…"          // null on the last page
+}
+```
+
+An unknown query parameter is a **400**, so a misspelled `agent-id` cannot
+silently return the unfiltered stream.
+
+**Rows carry no raw payload.** A page holds up to 100 rows and a payload is
+arbitrary client JSON, so embedding them would make the response size a function
+of untrusted input. The raw object belongs to detail — the main reason list and
+detail are separate endpoints.
+
+### Ordering
+
+`received_at DESC, id DESC`.
+
+`received_at` is server-assigned and therefore the only trustworthy axis;
+ordering by the client's `occurred_at` would let a caller rewrite its own
+position in the history. Two events routinely share a `received_at` — one ingest
+batch is one transaction stamped from one clock read — so `id` breaks the tie.
+Without that tiebreaker the sort is non-deterministic and pagination repeats or
+skips rows.
+
+### Cursor
+
+The cursor encodes exactly the ordering boundary, `(received_at, id)`, as
+base64url JSON `{ "r": …, "i": … }`. The query applies it as a **row-value
+comparison** — `(received_at, id) < ($1::timestamptz, $2::uuid)` — one expression
+that cannot disagree with the ORDER BY.
+
+**It carries no authority.** The workspace is deliberately absent: a cursor is
+client-held and therefore attacker-controlled, so if tenancy could be read from
+it, forging one would be a cross-tenant read. Scope comes only from the
+membership check, and the cursor is applied *inside* it. The worst a forged
+cursor can do is move the caller's own page boundary within their own workspace
+— asserted by test. It carries no secret, no session and no user identity;
+base64url is encoding, not encryption.
+
+Every malformed form — bad base64, non-JSON, arrays, `null`, missing or extra
+keys, non-UUID id, unparseable date, SQL-injection text — returns a safe **400**.
+Never a silent fall back to page one, which would restart a paging loop.
+
+### Agent filter
+
+`agent_id` is the **external** id. It is resolved to an internal UUID inside the
+authorized workspace, so workspace A asking for `agent-1` filters A's `agent-1`;
+B may independently have its own.
+
+An external id this workspace does not have returns
+`{"events": [], "nextCursor": null}` — **not** 404. A 404 would reveal whether
+the id exists somewhere on the platform. An id belonging only to another tenant
+returns byte-identically.
+
+### Detail and raw JSON (AC-06)
+
+`:eventId` is the **internal UUID** carried by timeline rows, not the
+client-supplied `event_id` — which is unique only per workspace and may contain
+any character. A malformed id, an unknown id and another tenant's id are all
+**404**; a UUID is not authorization.
+
+```jsonc
+{ "event": { "…summary fields…", "raw": { /* the validated event */ } } }
+```
+
+> **`raw` is the VALIDATED EVENT OBJECT, not raw HTTP request data.**
+>
+> It is exactly what the Step 9 contract accepted and Step 10 stored in
+> `events.payload` — post-parse, post-validation. It is not request bytes, not
+> headers, not the HTTP envelope. That distinction is why no credential material
+> can appear here: the `Authorization` header never reached the validated object
+> in the first place.
+
+The UI renders it with `JSON.stringify(raw, null, 2)` inside a `<pre>` as a
+React **text child**. A payload containing `<script>alert(1)</script>` displays
+as text; there is no `dangerouslySetInnerHTML` anywhere in the app.
+
+### Block linkage
+
+`block.externalBlockId` is the identity a runtime recognises; `block.id` is
+ours. Both are exposed so AC-08/AC-11 can later navigate from an event to its
+denial. Deliberately **not** included: rule, reason, amount and cap — block
+detail is a later step, and half-rendering a denial is worse than not rendering
+one.
+
+### Errors
+
+| Case | Status |
+| --- | --- |
+| No session | 401 |
+| API key presented instead of a session | 401 |
+| Workspace not a member of / nonexistent | 404 |
+| Malformed query, limit or cursor | 400 `invalid_query` |
+| Unknown, malformed or foreign event id | 404 `not_found` |
+| Database unconfigured | 503 |
+
+No SQL, no stack traces and no tenant hints in any body.
+
+### Read-only, and no bulk export
+
+There is no PATCH, DELETE or "dismiss" route; the repository exposes no update
+or delete. Reading a `spend.recorded` event performs no accounting, no
+reconciliation and no ledger backfill. CSV/JSON export is the deferred **AC-16**
+and daily rollups the deferred **AC-17** — neither is reachable, and page sizes
+are hard-capped partly so a single call cannot become an export.
+
+---
+
+## Not implemented in Step 11
 
 - **Ledger debit / spend accounting** — Step 19. See the warning at the top.
   When it arrives it hangs off the **same "this event is new" branch** as
@@ -472,8 +619,12 @@ data.
   no policy table and cannot mutate policy.
 - **Plane-owned blocks** — only `source = 'runtime'` is writable here.
 - **Precheck receipt creation** — ingest can verify a receipt, never issue one.
-- **Reading events back** — the timeline and raw-event detail APIs are Step 11.
-  A test asserts `GET /v1/events` still returns 404.
+- **Bulk export** (AC-16) and **rollups/summaries** (AC-17).
+- **Block and receipt detail views** — linkage ids only.
+- **Gone-dark inference** from last-seen (AC-14/15).
+- **Share links** (AC-18) and the **public demo** (AC-19). The read repository
+  takes a `WorkspaceScope`, which is the seam those will later resolve through,
+  but every Step 11 route is browser/operator only.
 - **Simulator event generation.**
 
 ---
@@ -482,7 +633,10 @@ data.
 
 | Behaviour | Evidence |
 | --- | --- |
-| Route, auth, validation, counts, 413, rollback | 52 in-process route tests |
+| Timeline auth, ordering, paging, filtering, detail, tenant isolation | 66 route tests + 24 cursor tests |
+| Workspace predicate, join scoping, ORDER BY, bound cursor params | 25 compiled-SQL tests (`.toSQL()`) |
+| Real ordering, tiebreak, cursor paging, payload exactness, isolation | `packages/db/tests/timeline.live.test.ts` — **SKIPPED** |
+| Route, auth, validation, counts, 413, rollback | 53 in-process route tests |
 | Duplicate payload immutability (block, agent, precheck, payload mutations) | 25 in-process tests, incl. source-level ordering guards |
 | Lock key determinism, range, collision, total ordering | 15 unit tests |
 | Unconfigured 503, 413, 404-on-GET, CSRF 403, no key in logs | compiled build over a real HTTP socket |
