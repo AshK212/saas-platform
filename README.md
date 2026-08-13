@@ -2,16 +2,20 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 8, agent registry, discovery & state.**
+**Current phase: Credit — Step 10, event ingest.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
-data-access layer, and passwordless magic-link sign-in.
+data-access layer, passwordless magic-link sign-in, workspace API credentials,
+the agent registry, and idempotent event ingest via `POST /v1/events`.
 
-Business functionality beyond sign-in, workspace selection, API credentials and
-the agent registry is intentionally **not** implemented yet: no events, policy,
-ledger, precheck, sharing or demo. **Being signed in grants access to no
-workspace** — tenant access comes only from a membership, re-proven on every
-request.
+Business functionality beyond that is intentionally **not** implemented yet: no
+policy, ledger, precheck, timeline, sharing or demo. **Being signed in grants
+access to no workspace** — tenant access comes only from a membership, re-proven
+on every request.
+
+> **Ingest records; it does not account.** A `spend.recorded` event is stored as
+> an audit record and debits no budget. Authoritative spend accounting is a
+> later step. See [event contracts](docs/event-contracts.md).
 
 ---
 
@@ -204,10 +208,15 @@ application code from importing `@hybrid/db/schema` or `drizzle-orm`. See
 | Variable | Used by | Writes data |
 | --- | --- | --- |
 | `DATABASE_URL` | read-only connectivity + transaction checks | no |
-| `TEST_DATABASE_URL` | cross-tenant isolation + live auth suites | yes — always rolled back |
+| `TEST_DATABASE_URL` | cross-tenant isolation, auth, credential, agent and **event-ingest** suites | yes |
 
-The isolation suite **never** falls back to `DATABASE_URL`. Point
+Data-writing suites **never** fall back to `DATABASE_URL`, and a guardrail test
+enforces that for every suite it finds on disk that contains a write. Point
 `TEST_DATABASE_URL` at a throwaway database or Neon branch, never production.
+
+Writes are rolled back, except for the handful of concurrency tests that must
+COMMIT to observe a real PostgreSQL race; those delete their own rows in a
+`finally`. Nothing is ever dropped or truncated.
 
 ## Environment setup
 
@@ -227,6 +236,7 @@ behind that prefix.
 - [Architecture](docs/architecture.md) — foundation, boundaries and invariants
 - [Authentication](docs/authentication.md) — magic-link flow, cookies, CORS, limits
 - [API authentication](docs/api-authentication.md) — API-key format, hashing, revocation
+- [Event contracts](docs/event-contracts.md) — `POST /v1/events` transport, ingest algorithm and replay idempotency
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -235,11 +245,11 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** in Step 1: authentication and magic
-links, email, workspaces and memberships, API keys and API authentication,
-agents, events, timelines, policies, ledger, prechecks, receipts, blocks, pause
-and spend enforcement, share links, the public demo, simulator scenarios, and
-any Hermes/OpenClaw runtime integration.
+The following are **deliberately absent** as of Step 10: reading events back
+(timeline and raw-event detail), policies and modes, spend and publish caps,
+prechecks and receipts, the ledger and any spend accounting, plane-owned blocks,
+pause enforcement, share links, the public demo, simulator scenarios, and any
+Hermes/OpenClaw runtime integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

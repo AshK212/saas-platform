@@ -32,6 +32,38 @@ export type {
   MagicLinkResponse,
 } from './auth.js';
 export {
+  actionBlockedEventSchema,
+  actionCategorySchema,
+  agentActionEventSchema,
+  decimalUsdSchema,
+  EVENT_INGEST_PATH,
+  eventIngestErrorSchema,
+  eventIngestRequestSchema,
+  eventIngestResponseSchema,
+  eventSchema,
+  eventTypeSchema,
+  heartbeatEventSchema,
+  MAX_EVENTS_PER_BATCH,
+  MAX_REPORTED_ISSUES,
+  spendRecordedEventSchema,
+  toValidationIssues,
+  validationIssueSchema,
+} from './events.js';
+export type {
+  ActionBlockedEvent,
+  ActionCategory,
+  AgentActionEvent,
+  DecimalUsd,
+  EventIngestError,
+  EventIngestRequest,
+  EventIngestResponse,
+  EventType,
+  HeartbeatEvent,
+  IngestEvent,
+  SpendRecordedEvent,
+  ValidationIssue,
+} from './events.js';
+export {
   AGENT_REGISTER_PATH,
   agentListResponseSchema,
   agentResponseSchema,

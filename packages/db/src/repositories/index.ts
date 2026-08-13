@@ -37,8 +37,18 @@ export type {
 } from './api-credentials.js';
 export type { AgentRepository, AgentRow } from './agents.js';
 
+export { createBlockRepository } from './blocks.js';
+export type { BlockRepository, BlockRow, ResolveRuntimeBlockInput } from './blocks.js';
+
 export { createEventRepository, eventQueries, eventScopePredicate } from './events.js';
-export type { EventRepository, EventRow } from './events.js';
+export type { EventRepository, EventRow, InsertEventInput } from './events.js';
+
+export { createIngestLockRepository } from './ingest-locks.js';
+export type { EventLockRequest, IngestLockRepository } from './ingest-locks.js';
+export { compareLockKeys, eventIngestLockKey } from './lock-keys.js';
+
+export { createPrecheckReceiptRepository } from './receipts.js';
+export type { PrecheckReceiptRepository } from './receipts.js';
 
 export {
   createRuntimeProfileRepository,

@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-12** (Step 8 — agent registry, discovery & state).
+Last updated: **2026-08-12** (Step 10 — `POST /v1/events` and idempotent ingest).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -85,14 +85,29 @@ confirmed against a real client-owned Neon project:
 - the six Step 8 live agent tests, currently **skipped**, including the
   concurrent-registration race (two simultaneous registrations must yield
   exactly one agent) and the `(workspace_id, external_id)` UNIQUE constraint.
-  Single-threaded JavaScript cannot establish either.
+  Single-threaded JavaScript cannot establish either;
+- the **sixteen Step 10 live event-ingest tests**, currently **skipped**. These
+  are the ones that would actually prove **AC-13**: the
+  `(workspace_id, event_id)` UNIQUE constraint, a two-way and a ten-way
+  concurrent replay of the same event resolving to exactly one stored row,
+  a racing duplicate creating no alternate block and no alternate agent,
+  overlapping batches (`[E1,E2]` against `[E2,E1]`) completing without
+  deadlock, batch rollback on an unresolved reference, cross-workspace block
+  and receipt isolation, and the absence of any ledger write. Every one is a
+  claim about what **PostgreSQL** does under concurrency, and the correctness
+  of ingest now rests on a `pg_advisory_xact_lock` that **no in-process test
+  can exercise at all**. Single-threaded JavaScript makes a read-then-act
+  sequence authoritative for free; PostgreSQL does not.
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-Structural validation passes. That is **not** production Neon validation and is
-not reported as such.
+**Four criteria are now code-complete and blocked only on environment**
+(AC-01, AC-02, AC-04, AC-13). That queue grows with every step, and each
+addition increases the chance that the first real run against Neon surfaces
+several problems at once rather than one at a time. This is the primary
+schedule risk on the project.
 
 Local structural validation passes. That is **not** production Neon validation
 and is not reported as such.
@@ -188,6 +203,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
-| A **separate** Neon branch/database + `TEST_DATABASE_URL` | AC-20 live cross-tenant isolation tests | Must NOT be the production database: this suite writes data (always inside a rolled-back transaction). A Neon branch is ideal and cheap. The test suite deliberately refuses to fall back to `DATABASE_URL`. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-13** replay idempotency and AC-20 cross-tenant isolation — 44 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
 | Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

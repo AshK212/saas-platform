@@ -108,7 +108,17 @@ export interface AgentRepository {
    * @param now - SERVER time. Never a caller-supplied timestamp.
    */
   register(input: RegisterAgentInput, now: Date): Promise<AgentRow>;
-  /** Advances last-seen for an existing agent. Used by later event ingest. */
+  /**
+   * Resolves an agent by external id, creating it if unknown - WITHOUT
+   * claiming activity.
+   *
+   * Used by event ingest, which must resolve the agent before it knows whether
+   * the event is new or a replay. Advancing last-seen here would let a retry
+   * storm make a stale agent look alive; the caller bumps it separately, only
+   * for events that were actually new.
+   */
+  discover(externalId: string, now: Date): Promise<AgentRow>;
+  /** Advances last-seen. Called only for newly accepted events. */
   touchLastSeen(agentId: string, now: Date): Promise<void>;
 }
 
@@ -197,6 +207,49 @@ export function createAgentRepository(
       const row = rows[0];
       if (row === undefined) {
         throw new Error('Failed to register agent.');
+      }
+      return row;
+    },
+
+    /**
+     * Resolve-or-create WITHOUT touching last-seen.
+     *
+     *   INSERT INTO agents (workspace_id, external_id, ...) VALUES (...)
+     *   ON CONFLICT (workspace_id, external_id)
+     *   DO UPDATE SET updated_at = agents.updated_at   -- self-assignment
+     *   RETURNING *
+     *
+     * The self-assignment looks odd but is deliberate: `DO NOTHING` would
+     * return no row on conflict, forcing a second SELECT and a race window,
+     * while `DO UPDATE` guarantees the existing row comes back. Assigning a
+     * column to itself changes nothing observable - notably NOT `last_seen_at`.
+     *
+     * A newly discovered agent is created with `last_seen_at = NULL`. The
+     * caller sets it only if the triggering event turns out to be new.
+     *
+     * Creates no policy, sets no runtime profile, and touches no
+     * operator-owned field.
+     */
+    async discover(externalId: string, now: Date): Promise<AgentRow> {
+      const rows = await executor
+        .insert(agents)
+        .values({
+          workspaceId: scope.workspaceId,
+          externalId,
+          // No display name is invented - the agent has not told us one.
+          displayName: null,
+          lastSeenAt: null,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [agents.workspaceId, agents.externalId],
+          set: { updatedAt: sql`${agents.updatedAt}` },
+        })
+        .returning();
+
+      const row = rows[0];
+      if (row === undefined) {
+        throw new Error('Failed to discover agent.');
       }
       return row;
     },

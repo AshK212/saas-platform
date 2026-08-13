@@ -5,7 +5,9 @@ import type { AgentStore } from './agents/store.js';
 import type { ApiKeyStore } from './api-keys/store.js';
 import { systemClock, type Clock } from './auth/clock.js';
 import type { AuthService } from './auth/service.js';
+import type { EventIngestStore } from './events/store.js';
 import { createAgentRoutes } from './routes/agents.js';
+import { createEventRoutes } from './routes/events.js';
 import { createApiKeyRoutes } from './routes/api-keys.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -64,6 +66,12 @@ export interface AppDependencies {
    */
   readonly agentStore?: AgentStore | undefined;
 
+  /**
+   * Event ingest persistence. `undefined` when the database is unconfigured -
+   * `POST /v1/events` then answers 503 while liveness stays unaffected.
+   */
+  readonly eventStore?: EventIngestStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -71,12 +79,12 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 8 SCOPE
- * ------------
+ * STEP 10 SCOPE
+ * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
- * workspace API credentials, and the agent registry. Events, policies,
- * prechecks, ledger, receipts, sharing and demo surfaces are intentionally
- * absent.
+ * workspace API credentials, the agent registry, and idempotent event INGEST.
+ * Event READ surfaces (timeline, raw detail), policies, prechecks, ledger,
+ * receipts, sharing and demo are intentionally absent.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -152,6 +160,14 @@ export function createApp(dependencies: AppDependencies): Hono {
       apiKeyStore: dependencies.apiKeyStore,
       workspaceStore: dependencies.workspaceStore,
       authService: dependencies.authService,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createEventRoutes({
+      eventStore: dependencies.eventStore,
+      apiKeyStore: dependencies.apiKeyStore,
       clock: dependencies.clock ?? systemClock,
     }),
   );

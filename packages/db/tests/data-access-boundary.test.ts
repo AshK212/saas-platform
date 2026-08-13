@@ -180,7 +180,10 @@ describe('raw schema is not reachable from the package root', () => {
 describe('repository factories require a workspace scope', () => {
   const FACTORIES = [
     ['createAgentRepository', repositories.createAgentRepository],
+    ['createBlockRepository', repositories.createBlockRepository],
     ['createEventRepository', repositories.createEventRepository],
+    ['createIngestLockRepository', repositories.createIngestLockRepository],
+    ['createPrecheckReceiptRepository', repositories.createPrecheckReceiptRepository],
     ['createRuntimeProfileRepository', repositories.createRuntimeProfileRepository],
   ] as const;
 
@@ -210,7 +213,7 @@ describe('repository factories require a workspace scope', () => {
 
 describe('every repository source file scopes its queries', () => {
   /** Files whose every statement is a read. */
-  const READ_ONLY_FILES = ['events.ts', 'runtime-profiles.ts'];
+  const READ_ONLY_FILES = ['receipts.ts', 'runtime-profiles.ts'];
 
   /**
    * Files that also perform SCOPED writes.
@@ -220,9 +223,31 @@ describe('every repository source file scopes its queries', () => {
    * repository is a deliberate, reviewed addition rather than something that
    * slips past a blanket "no writes" rule.
    */
-  const WRITING_FILES = ['agents.ts', 'api-credentials.ts'];
+  const WRITING_FILES = ['agents.ts', 'api-credentials.ts', 'blocks.ts', 'events.ts'];
+
+  /**
+   * Files in `repositories/` that hold no query at all, and why.
+   *
+   * Enumerated so the classification above stays exhaustive: a new file that is
+   * neither read-only nor writing nor listed here fails the census below,
+   * rather than quietly escaping every rule in this block.
+   *
+   * `lock-keys.ts` takes a bare `workspaceId: string`, which the raw-argument
+   * rule would otherwise flag. That is correct here and only here: it is a pure
+   * hash function, not a query, so there is no row for a wrong workspace id to
+   * expose. Its caller derives the value from a `WorkspaceScope`.
+   */
+  const NON_QUERY_FILES = ['executor.ts', 'index.ts', 'ingest-locks.ts', 'lock-keys.ts', 'workspace-scope.ts'];
 
   const REPOSITORY_FILES = [...READ_ONLY_FILES, ...WRITING_FILES];
+
+  it('every file in repositories/ is classified', () => {
+    const onDisk = readdirSync(path.join(PACKAGE_ROOT, 'src', 'repositories'))
+      .filter((name) => name.endsWith('.ts'))
+      .sort();
+
+    expect(onDisk).toEqual([...REPOSITORY_FILES, ...NON_QUERY_FILES].sort());
+  });
 
   it.each(READ_ONLY_FILES)('%s references workspaceId in every query builder', (fileName) => {
     const source = readFileSync(
@@ -231,7 +256,9 @@ describe('every repository source file scopes its queries', () => {
     );
 
     // Each query builder must run through the file's scope predicate helper.
-    const selectCount = (source.match(/\.select\(\)/g) ?? []).length;
+    // Both `.select()` and a projected `.select({...})` count - a projection
+    // is still a read of tenant rows.
+    const selectCount = (source.match(/\.select\(/g) ?? []).length;
     const scopePredicateCount = (source.match(/ScopePredicate\(scope\)/g) ?? []).length;
 
     expect(selectCount).toBeGreaterThan(0);
@@ -344,47 +371,189 @@ describe('resolvers are the only unscoped reads, and stay bounded', () => {
 });
 
 describe('destructive live tests cannot target production', () => {
-  const liveSource = readFileSync(
-    path.join(PACKAGE_ROOT, 'tests', 'tenant-isolation.live.test.ts'),
-    'utf8',
-  );
+  /**
+   * EVERY data-writing live suite, discovered from disk rather than listed.
+   *
+   * A hand-maintained list would silently stop covering a suite added later -
+   * which is exactly the suite most likely to get its gate wrong.
+   */
+  const LIVE_SUITES = readdirSync(path.join(PACKAGE_ROOT, 'tests'))
+    .filter((name) => name.endsWith('.live.test.ts'))
+    .sort();
 
-  it('gates on TEST_DATABASE_URL', () => {
-    expect(liveSource).toContain("process.env['TEST_DATABASE_URL']");
+  const read = (fileName: string): string =>
+    readFileSync(path.join(PACKAGE_ROOT, 'tests', fileName), 'utf8');
+
+  /**
+   * Whether a suite mutates data, DERIVED FROM ITS SOURCE.
+   *
+   * Deliberately not a hand-maintained allowlist. The gate a suite must satisfy
+   * follows from what it actually does, so a suite cannot be reclassified as
+   * harmless while quietly containing an INSERT.
+   */
+  const writesData = (source: string): boolean =>
+    /\.insert\(|\.update\(|\.delete\(/.test(source) ||
+    /\b(insert\s+into|update\s+\w+\s+set|delete\s+from)\b/i.test(source);
+
+  const WRITING_SUITES = LIVE_SUITES.filter((name) => writesData(read(name)));
+  const READING_SUITES = LIVE_SUITES.filter((name) => !writesData(read(name)));
+
+  it('classifies the live suites', () => {
+    // Guards the guard: a glob that matched nothing, or a classifier that put
+    // every suite in the unchecked bucket, would make the rest vacuous.
+    expect(LIVE_SUITES.length).toBeGreaterThan(0);
+    expect(WRITING_SUITES).toContain('event-ingest.live.test.ts');
+    expect(WRITING_SUITES).toContain('tenant-isolation.live.test.ts');
+    // The connectivity probe only SELECTs, so it may use DATABASE_URL.
+    expect(READING_SUITES).toEqual(['neon-connectivity.live.test.ts']);
   });
 
-  it('never falls back to DATABASE_URL', () => {
+  it.each(WRITING_SUITES)('%s gates on TEST_DATABASE_URL', (fileName) => {
+    expect(read(fileName)).toContain("process.env['TEST_DATABASE_URL']");
+  });
+
+  it.each(WRITING_SUITES)('%s skips itself when the gate is unset', (fileName) => {
+    // Without skipIf the suite would not skip - it would FAIL on a developer
+    // machine, and the pressure would be to point it at whatever database
+    // happens to be configured.
+    expect(read(fileName)).toMatch(/describe\.skipIf\(!hasTestDatabase\)/);
+  });
+
+  it.each(WRITING_SUITES)('%s never falls back to DATABASE_URL', (fileName) => {
     // A fallback is how a data-writing suite ends up pointed at production.
-    const readsProductionUrl = /process\.env\[['"]DATABASE_URL['"]\]/.test(liveSource);
+    const readsProductionUrl = /process\.env\[['"]DATABASE_URL['"]\]/.test(read(fileName));
 
-    expect(readsProductionUrl, 'live isolation suite must not read DATABASE_URL').toBe(false);
+    expect(readsProductionUrl, `${fileName} must not read DATABASE_URL`).toBe(false);
   });
 
-  it('rolls back every write instead of deleting rows', () => {
-    // Rollback leaves no residue even on failure, and a stray run against a
-    // populated database still cannot destroy existing data.
-    expect(liveSource).toContain('Rollback');
-    expect(liveSource).not.toMatch(/\bdrop\s+table\b|\btruncate\b/i);
+  it.each(WRITING_SUITES)('%s rolls its writes back', (fileName) => {
+    // Rollback leaves no residue even on failure. The few tests that must
+    // COMMIT (to observe a real race) delete their own rows in a finally.
+    expect(read(fileName)).toContain('Rollback');
   });
 
-  it('never logs the connection string', () => {
-    expect(liveSource).not.toMatch(/console\.(log|info|warn|error)/);
+  it.each(LIVE_SUITES)('%s never drops or truncates', (fileName) => {
+    // A stray run against a populated database still cannot destroy data.
+    expect(read(fileName)).not.toMatch(/\bdrop\s+table\b|\btruncate\b/i);
+  });
+
+  it.each(LIVE_SUITES)('%s never logs the connection string', (fileName) => {
+    expect(read(fileName)).not.toMatch(/console\.(log|info|warn|error)/);
   });
 });
 
 describe('mutation surface stays narrow and scoped', () => {
-  it.each(['events.ts', 'runtime-profiles.ts'])('%s performs no writes', (fileName) => {
+  it.each(['receipts.ts', 'runtime-profiles.ts'])('%s performs no writes', (fileName) => {
     const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
 
     expect(source, fileName).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
   });
 
-  it.each(['agents.ts', 'api-credentials.ts'])('%s never deletes tenant rows', (fileName) => {
-    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
+  it.each(['agents.ts', 'api-credentials.ts', 'blocks.ts', 'events.ts'])(
+    '%s never deletes tenant rows',
+    (fileName) => {
+      const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
 
-    // Revocation and de-registration must be state changes, not deletions -
-    // the rows are audit history.
-    expect(source, fileName).not.toMatch(/\.delete\(/);
+      // Revocation and de-registration must be state changes, not deletions -
+      // the rows are audit history.
+      expect(source, fileName).not.toMatch(/\.delete\(/);
+    },
+  );
+
+  it.each(['blocks.ts', 'events.ts'])('%s is append-only: no update either', (fileName) => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // The audit stream is the evidence AC-06 and AC-13 rest on. An UPDATE path
+    // here would let a replayed event rewrite recorded history, and
+    // `onConflictDoUpdate` is an UPDATE by another name.
+    expect(code, fileName).not.toMatch(/\.update\(/);
+    expect(code, fileName).not.toContain('onConflictDoUpdate');
+  });
+
+  it('event insert is workspace-anchored and idempotent', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'events.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Workspace comes from the scope, never from the caller's input object.
+    expect(code).toContain('workspaceId: scope.workspaceId');
+    expect(code).not.toMatch(/workspaceId:\s*input\./);
+    // The unique index on (workspace_id, event_id) is the race arbiter for
+    // AC-13; DO NOTHING is what makes a concurrent duplicate a no-op rather
+    // than a constraint violation or an overwrite.
+    expect(code).toContain('onConflictDoNothing');
+    expect(code).toContain('target: [events.workspaceId, events.eventId]');
+  });
+
+  it('block resolution conflicts on the workspace-scoped external id', () => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', 'blocks.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).toContain('workspaceId: scope.workspaceId');
+    expect(code).toContain('onConflictDoNothing');
+    expect(code).toContain('target: [blocks.workspaceId, blocks.externalBlockId]');
+    // Runtime-reported blocks are self-declared. Only the plane may mint a
+    // block it claims to have enforced, so `source` is not a parameter.
+    expect(code).toContain("source: 'runtime'");
+    expect(code).not.toMatch(/source:\s*input\.|source:\s*\w+Source/);
+  });
+
+  it('ingest serialization is transaction-scoped, never session-scoped', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'ingest-locks.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Neon and PgBouncer pool per TRANSACTION. A session-scoped
+    // `pg_advisory_lock` would outlive the request, attach to whichever request
+    // next borrowed the connection, and eventually wedge the pool.
+    expect(code).toContain('pg_advisory_xact_lock');
+    expect(code).not.toMatch(/pg_advisory_lock\s*\(/);
+    expect(code).not.toContain('pg_advisory_unlock');
+    // The workspace comes from the scope, so a caller cannot aim a lock at
+    // another tenant's key space.
+    expect(code).toContain('scope.workspaceId');
+  });
+
+  it('locks are acquired in deterministic order', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'ingest-locks.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Without a sort, two batches carrying the same ids in opposite order can
+    // deadlock, because xact locks are held until COMMIT.
+    expect(code).toContain('.sort(compareLockKeys)');
+    // And sequentially - Promise.all would forfeit the ordering entirely.
+    expect(code).not.toMatch(/Promise\.all/);
+  });
+
+  it('the lock key derivation is pure and reproducible across instances', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'lock-keys.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // A key that varied by process would mean two Render instances failing to
+    // exclude each other on the same event.
+    expect(code).not.toMatch(/Math\.random|Date\.now|process\.(pid|env)|randomUUID/);
+    expect(code).toContain("createHash('sha256')");
+  });
+
+  it('the receipt repository can only test existence', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'receipts.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Ingest must be able to VERIFY a precheck receipt, never to create one -
+    // a self-issued receipt would be an approval an agent granted itself.
+    expect(code).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+    expect(code).toContain('receiptScopePredicate(scope)');
   });
 
   it('agent writes are workspace-anchored', () => {

@@ -87,15 +87,15 @@ describe('no per-key permission surface exists', () => {
     }
   });
 
-  it('no event, policy or precheck contract has been added yet', () => {
-    // `agents.ts` arrived legitimately in Step 8. These three belong to later
-    // steps and must not appear early.
+  it('no policy, precheck or ledger contract has been added yet', () => {
+    // `agents.ts` arrived in Step 8 and `events.ts` in Step 9. These three
+    // belong to later steps and must not appear early.
     const files = readdirSync(CONTRACTS_SRC);
 
-    expect(files).not.toContain('events.ts');
     expect(files).not.toContain('policy.ts');
     expect(files).not.toContain('precheck.ts');
     expect(files).not.toContain('ledger.ts');
+    expect(files).not.toContain('receipts.ts');
   });
 
   it('the agent contract carries no policy or credential surface', () => {

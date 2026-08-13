@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-12** (Step 8 — agent registry, discovery & state).
+Last updated: **2026-08-12** (Step 10 — `POST /v1/events` and idempotent ingest).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -40,21 +40,21 @@ only and does not redefine any criterion.
 | AC-03 | Documented simulator / reference command | CREDIT — baseline | `FOUNDATION ONLY` | `apps/simulator` exists, compiles, and runs as an executable skeleton. No acceptance command is documented and no scenario is implemented. |
 | AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
 | AC-05 | Timeline + agent filter | CREDIT — functional | `NOT STARTED` | None. The web app is an empty shell by design. |
-| AC-06 | Raw JSON event detail | CREDIT | `NOT STARTED` | None. |
+| AC-06 | Raw JSON event detail | CREDIT | `FOUNDATION ONLY` | **Step 10 began writing the data this criterion displays**: the entire validated event is stored verbatim in `events.payload`, which is the drill-through source. It is stored from the *validated* object rather than raw request bytes, so no credential or header material can reach the audit record. **No read path exists** — there is no timeline, no detail API and no UI; `GET /v1/events` returns 404, asserted by test. Step 11 owns the read surface. |
 | AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `NOT STARTED` | None. |
 | AC-08 | $41 over-cap denial + block/receipt | CREDIT | `NOT STARTED` | None. |
 | AC-09 | Immediate block email | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `NOT STARTED` | None. |
 | AC-11 | Publish cap 5/day, 6th denied | CREDIT | `NOT STARTED` | None. |
 | AC-12 | Pause next precheck denial + unpause | CREDIT | `NOT STARTED` | None. |
-| AC-13 | Event replay idempotency | CREDIT | `NOT STARTED` | None. |
+| AC-13 | Event replay idempotency | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 10 implemented ingest**, corrected after architecture review. `POST /v1/events` is mounted, bearer-authenticated, workspace derived from the credential row. One transaction per batch; the **duplicate decision precedes every one-time side effect**, serialized by a transaction-scoped `pg_advisory_xact_lock` keyed on `(workspace_id, event_id)` and acquired in deterministic order to avoid deadlock, with the Step 3 index `UNIQUE (workspace_id, event_id)` retained as defense in depth. Replaying a batch returns 200 with `accepted: 0, duplicates: N`; the stored count is unchanged, original rows untouched, `last_seen_at` not refreshed, and a replay carrying changed content creates no alternate block, agent or linkage. 92 in-process tests plus a real-socket run against the compiled build. **NOT PASS:** the live PostgreSQL suite — the only thing that can prove the advisory lock actually serializes, that a racing duplicate creates no alternate block or agent, that overlapping batches do not deadlock, and that cross-tenant isolation holds — is **SKIPPED**, gated on a `TEST_DATABASE_URL` that does not exist. |
 | AC-14 | Gone-dark | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-15 | 11:00 UTC digest | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-16 | Filtered CSV parity | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-18 | Revocable read-only share link | CREDIT | `NOT STARTED` | None. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
-| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **251 tests, 14 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
+| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **797 tests, 28 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
 
 ---
@@ -92,6 +92,62 @@ Three things stand between the current state and AC-01 PASS, none of them code:
 Authentication also grants no workspace access, so it advances no other
 criterion. AC-02 in particular remains `NOT STARTED`: membership and workspace
 selection are Step 6.
+
+## Step 9 note: event contracts
+
+Step 9 defined the `POST /v1/events` transport contract and nothing else — no
+route, no persistence, no behaviour. `packages/contracts` still depends only on
+Zod, so the same definitions serve the API, the browser app and the simulator.
+
+Three decisions carry real weight for later acceptance:
+
+- **Money is a decimal string, never a JSON number.** IEEE-754 rounding in a
+  cap decision would be a silent accounting defect; `"0.0000009"` is rejected
+  rather than rounded.
+- **Strict envelopes.** `{"amout_usd": "41.00"}` is a 400, not a spend event
+  with a missing amount. This also makes `workspace_id`, policy fields and
+  credentials structurally unexpressible.
+- **Vocabulary is verified against the migrated SQL**, so the Zod enums and the
+  PostgreSQL enums cannot drift.
+
+AC-13 moves to `FOUNDATION ONLY — CONTRACT READY`. It is **not** implemented.
+
+## Step 10 note: event ingest
+
+Step 10 mounted `POST /v1/events` and implemented idempotent persistence.
+
+The decision that matters for AC-13 is **where idempotency lives**. It is the
+database index `UNIQUE (workspace_id, event_id)`, reached through
+`INSERT … ON CONFLICT DO NOTHING RETURNING`.
+
+**Correction after architecture review.** The first implementation put that
+insert *last*, so the agent, the receipt and the runtime block were all resolved
+before the replay was detected — one-time side effects performed for an event
+that was never accepted. Because `event_id` is client-supplied, that made the
+replay path a way to create rows: a known event id with a fresh `block_id`
+created a block; with a fresh `agent_id` it enrolled an agent. The ordering is
+now **duplicate decision first**, serialized by a transaction-scoped
+`pg_advisory_xact_lock` keyed on `(workspace_id, event_id)`, with locks acquired
+in a deterministic total order so overlapping batches cannot deadlock. The
+UNIQUE constraint is retained beneath it as defense in depth. See
+[event-contracts.md](event-contracts.md).
+
+Two further behaviours were chosen deliberately and are worth recording:
+
+- **A duplicate replay does not refresh `last_seen_at`.** Advancing last-seen is
+  gated on the insert being new. Otherwise a retry storm would make a dead agent
+  look alive — and last-seen is the entire substance of AC-04.
+- **An unresolved `precheck_id` fails the whole batch** rather than storing the
+  event with the linkage silently dropped. A receipt in another workspace is
+  reported identically to one that does not exist.
+
+**Ingest performs no ledger debit.** A `spend.recorded` event is an audit record
+only. This is stated loudly in [event-contracts.md](event-contracts.md) because
+"events were accepted" must not be mistaken for "spend was counted". Step 19
+owns authoritative accounting; AC-07, AC-08 and AC-10 remain `NOT STARTED`.
+
+AC-13 moves to `IMPLEMENTED / STAGING VERIFICATION BLOCKED` — **not PASS**. The
+live suite that would prove the concurrency race has never run.
 
 ## Step 8 note: agent registry
 
@@ -139,17 +195,19 @@ the first authenticated browser mutation. See
 AC-02 moves to `PARTIAL`, not `PASS`: API-key issuance is Step 7, and nothing
 has been demonstrated on staging.
 
-## Summary at Step 8
+## Summary at Step 10
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **3** (AC-01, AC-02, AC-04)
-- `FOUNDATION ONLY`: **2** (AC-03, AC-20)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **4** (AC-01, AC-02, AC-04, AC-13)
+- `FOUNDATION ONLY`: **3** (AC-03, AC-06, AC-20)
 - `BLOCKED`: **1** (AC-21)
-- `NOT STARTED`: **10**
+- `NOT STARTED`: **8**
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
-Resend and Render.
+Resend and Render. Four criteria are now code-complete and waiting only on an
+authorized environment — that queue is the single largest risk to the delivery
+date, and it grows with every step.
 
 ## Step 3 note: relational foundation per criterion
 
