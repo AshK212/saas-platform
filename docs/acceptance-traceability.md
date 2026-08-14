@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-13** (Step 15 — precheck decision engine and durable receipts).
+Last updated: **2026-08-14** (Step 16 — plane-owned blocks and denial atomicity).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -42,11 +42,11 @@ only and does not redefine any criterion.
 | AC-05 | Timeline + agent filter | CREDIT — functional | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 implemented both halves.** `GET /v1/workspaces/:id/events` returns the workspace stream newest-first by server `received_at` with `id` as a deterministic tiebreaker, bounded pages (default 50, max 100) and opaque `(received_at, id)` cursor pagination that neither repeats nor skips rows. Per-agent filtering resolves the **external** `agent_id` inside the authorized workspace, so a shared `agent-1` cannot cross tenants; an unknown id returns an empty page rather than revealing existence. Browser-session auth only — an API key is refused. A functional operator UI lists events, filters by agent, and loads more. 66 route tests, 24 cursor tests, 25 compiled-SQL tests. **NOT PASS:** never demonstrated in an authorized environment, and the live PostgreSQL suite that proves real ordering, tiebreak and cursor behaviour is **SKIPPED**. |
 | AC-06 | Raw JSON event detail | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 completed the drill-through.** `GET /v1/workspaces/:id/events/:eventId` returns the event plus `raw` — the validated event object exactly as Step 10 stored it in `events.payload`, nested structure intact. `raw` is the **validated object, not raw HTTP request data**, which is why no credential or header material can appear in it. The UI renders it via `JSON.stringify(raw, null, 2)` in a `<pre>` as a React text child; a payload containing `<script>` displays as text and there is no `dangerouslySetInnerHTML` in the app. A malformed, unknown or foreign event id is uniformly 404. **NOT PASS:** never demonstrated in an authorized environment, and the live test asserting byte-for-byte `jsonb` round-tripping is **SKIPPED**. |
 | AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `IMPLEMENTED PARTIAL` | **All three halves now exist.** Step 13: an operator sets `budgeted` and a `$25.000000` cap in the UI. Step 14: the authoritative UTC-day ledger with exact micro-dollar arithmetic. **Step 15: `POST /v1/actions/precheck` compares the cap to committed usage and enforces it** — 20 allows, 5 more allows to exactly the cap, one more micro-dollar denies, each with a durable receipt. **NOT COMPLETE:** never demonstrated in an authorized environment, the live serialization suite is skipped, and the acceptance flow expects enforcement visible end to end with the block/receipt UI that arrives later. |
-| AC-08 | $41 over-cap denial + block/receipt | CREDIT | `IMPLEMENTED PARTIAL` | **Step 15 delivers the denial and the receipt.** $41 against a $25 cap denies with `daily_spend_cap_exceeded`, the ledger stays at 0, and a durable receipt records the exact policy version, applied cap, requested amount, ledger-before and remaining. Exact micro-dollar arithmetic; concurrent decisions serialize on the ledger row so two callers can never both allow past the cap. **NOT COMPLETE: the plane-owned BLOCK is not created — that is Step 16.** The criterion names block *and* receipt, so half of its artifact is missing. Nothing demonstrated on staging. |
+| AC-08 | $41 over-cap denial + block/receipt | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both artifacts now exist.** $41 against a $25 cap denies with `daily_spend_cap_exceeded`, the ledger stays at 0, and one transaction commits a durable receipt (exact policy version, applied cap, requested amount, ledger-before, remaining) **and** a plane-owned block (`source = 'plane'`, `rule = daily_spend_cap`, requested amount, linked to that receipt). A failure in either half rolls the other back. A retry creates no second block. **NOT PASS:** never demonstrated in an authorized environment; the live suite proving real transactional atomicity is SKIPPED; and presentation of the block/receipt is Step 17. |
 | AC-09 | Immediate block email | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `IMPLEMENTED PARTIAL` | **Every mechanical piece now exists.** Raising a cap is atomic with a version bump (Step 13), does not reset committed spend (Step 14), propagates on the next ~30-second poll (Step 12), and the next precheck evaluates against the new cap and real retained usage (Step 15). **NOT COMPLETE:** the end-to-end flow — deny, raise, allow within 60 seconds — has never been exercised as one sequence, and requires a database and staging. |
-| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `IMPLEMENTED PARTIAL` | **Step 15 denies the 6th publish.** Five prechecks allow and commit `+1` each; the sixth denies with `daily_publish_cap_exceeded` and commits nothing. Six durable receipts. Concurrent publishes serialize on the ledger row, so six simultaneous requests allow exactly five. **NOT COMPLETE: no plane-owned block is created — Step 16.** Nothing demonstrated on staging. |
-| AC-12 | Pause next precheck denial + unpause | CREDIT | `IMPLEMENTED PARTIAL` | **Step 15 denies on pause.** A `paused` agent is denied for **every** category including `other`, with reason `paused`, no ledger effect, and a receipt recording the applied mode. Unpausing to `watch` or `budgeted` restores decisions on the next precheck. **NOT COMPLETE: no plane-owned block is created — Step 16.** Nothing demonstrated on staging. |
+| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | Five prechecks allow and commit `+1` each with **no blocks**; the sixth denies with `daily_publish_cap_exceeded`, commits nothing, and records a receipt plus **exactly one** plane block (`rule = daily_publish_cap`, `count = 1`, spend column null). Six receipts, one block. Concurrent publishes serialize, so six simultaneous requests allow exactly five. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; presentation is Step 17. |
+| AC-12 | Pause next precheck denial + unpause | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **The full sequence works locally.** Setting `mode = paused` through the operator route creates **no block** — a policy change is not a denial. The next precheck, in **any** category including `other`, denies with reason `paused` and records a receipt plus a plane block (`rule = agent_paused`), with no ledger effect. Unpausing restores decisions on the next action and creates no further block. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; presentation is Step 17. |
 | AC-13 | Event replay idempotency | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 10 implemented ingest**, corrected after architecture review. `POST /v1/events` is mounted, bearer-authenticated, workspace derived from the credential row. One transaction per batch; the **duplicate decision precedes every one-time side effect**, serialized by a transaction-scoped `pg_advisory_xact_lock` keyed on `(workspace_id, event_id)` and acquired in deterministic order to avoid deadlock, with the Step 3 index `UNIQUE (workspace_id, event_id)` retained as defense in depth. Replaying a batch returns 200 with `accepted: 0, duplicates: N`; the stored count is unchanged, original rows untouched, `last_seen_at` not refreshed, and a replay carrying changed content creates no alternate block, agent or linkage. 92 in-process tests plus a real-socket run against the compiled build. **NOT PASS:** the live PostgreSQL suite — the only thing that can prove the advisory lock actually serializes, that a racing duplicate creates no alternate block or agent, that overlapping batches do not deadlock, and that cross-tenant isolation holds — is **SKIPPED**, gated on a `TEST_DATABASE_URL` that does not exist. |
 | AC-14 | Gone-dark | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-15 | 11:00 UTC digest | LATER | `DEFERRED` | Out of Credit phase. |
@@ -54,7 +54,7 @@ only and does not redefine any criterion.
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-18 | Revocable read-only share link | CREDIT | `NOT STARTED` | None. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
-| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **1505 tests, 43 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
+| AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **1555 tests, 44 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
 
 ---
@@ -328,31 +328,58 @@ was rewritten.
 AC-11 and AC-12 all name a *block* alongside the receipt, and plane-owned blocks
 are Step 16.
 
-## Summary at Step 15
+## Step 16 note: plane-owned blocks
+
+Step 16 completes **WHOEVER DENIES, RECORDS**. A plane denial now writes its
+receipt and its block in one transaction; an allow writes no block.
+
+The schema needed **no change**. Step 3 had already modelled the FK once, on
+`blocks.precheck_receipt_id`, explicitly to avoid a circular constraint *and* to
+keep receipts insert-only — so the ordering is simply receipt → block, with
+nothing updated afterwards and receipt immutability intact.
+
+Three properties are worth recording:
+
+- **Ownership cannot be forged.** `blocks.ts` hardcodes `source = 'runtime'`,
+  `plane-blocks.ts` hardcodes `'plane'`, and in neither is `source` a parameter.
+  There is no generic `createBlock`.
+- **A policy change is not a denial.** Setting `paused` records nothing; the
+  next refused action does. That distinction is the substance of AC-12.
+- **One denial vocabulary.** `reason` → `rule` is a single exhaustive mapping,
+  so the receipt, the block and the wire response cannot disagree about why one
+  action was refused.
+
+**AC-08, AC-11 and AC-12 advance to `IMPLEMENTED / STAGING VERIFICATION
+BLOCKED`** — every artifact those criteria name now exists and is atomic. They
+are not PASS: nothing has run against a real database, and their presentation is
+Step 17.
+
+## Summary at Step 16
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **6** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-13)
-- `IMPLEMENTED PARTIAL`: **5** (AC-07, AC-08, AC-10, AC-11, AC-12)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **9** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-08, AC-11, AC-12, AC-13)
+- `IMPLEMENTED PARTIAL`: **2** (AC-07, AC-10)
 - `FOUNDATION` / `FOUNDATION ONLY`: **2** (AC-03, AC-20)
 - `BLOCKED`: **1** (AC-21)
 - `NOT STARTED`: **2** (AC-18, AC-19)
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-6 + 5 + 2 + 1 + 2 + 5 = 21.
+9 + 2 + 2 + 1 + 2 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
 Resend and Render. **Six** criteria are code-complete and waiting only on an
 authorized environment — that queue is the single largest risk to the delivery
 date, and it has grown at every step since Step 5.
 
-**The enforcement risk has narrowed sharply.** AC-07, AC-08, AC-10, AC-11 and
-AC-12 now all decide and enforce; what remains for the three that name one is
-the plane-owned **block** (Step 16), which is a single well-defined artifact
-written in the transaction that already exists. That is a much smaller and more
-predictable body of work than the whole decision engine was.
+**The enforcement work is essentially done.** AC-08, AC-11 and AC-12 have every
+artifact they name. AC-07 and AC-10 remain partial only because their acceptance
+is observed through an operator UI that does not exist yet (Step 17 for
+receipt/block presentation and today's spend against cap).
 
-**The environment risk has not narrowed at all.** Eleven criteria are now
-code-complete or partial and *none* has run against a real database.
+**The environment risk has not narrowed at all, and it now dominates.** Eleven
+criteria are code-complete or partial and **none** has ever run against a real
+database. Every concurrency, atomicity and isolation guarantee in Steps 10–16 is
+argued and tested-but-unrun.
 
 ## Step 3 note: relational foundation per criterion
 

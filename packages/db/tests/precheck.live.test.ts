@@ -2,6 +2,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { toUtcAccountingDay } from '../src/accounting/utc-day';
+import { createPlaneBlockRepository } from '../src/repositories/plane-blocks';
+import { blocks } from '../src/schema/blocks';
 import { closeDatabasePool, createDatabaseClient, createDatabasePool } from '../src/client';
 import { createLedgerRepository } from '../src/repositories/ledger';
 import { createPolicyReadRepository } from '../src/repositories/policy';
@@ -77,6 +79,25 @@ interface Outcome {
   readonly reason: string | null;
   readonly replayed: boolean;
 }
+
+/**
+ * The denial vocabulary, mirrored locally.
+ *
+ * `packages/db` cannot import `@hybrid/contracts` - the dependency runs the
+ * other way - so this transcribes the single shared mapping from
+ * `contracts/src/denial.ts`. An agreement test in `apps/api`, which depends on
+ * both, proves the two never drift.
+ */
+const RULE_FOR_REASON: Record<string, string> = {
+  daily_spend_cap_exceeded: 'daily_spend_cap',
+  daily_publish_cap_exceeded: 'daily_publish_cap',
+  paused: 'agent_paused',
+};
+const EXPLANATION_FOR_REASON: Record<string, string> = {
+  daily_spend_cap_exceeded: 'Daily spend cap reached.',
+  daily_publish_cap_exceeded: 'Daily publish cap reached.',
+  paused: 'Agent is paused.',
+};
 
 /** Exact micro-dollar helpers, matching the production arithmetic. */
 function toMicros(value: string): bigint {
@@ -213,6 +234,21 @@ async function runPrecheck(
     denyReason: reason,
   });
 
+  // 8. WHOEVER DENIES, RECORDS. The plane block, in the SAME transaction,
+  //    linked to the receipt just inserted. An allow writes none.
+  if (decision === 'deny' && reason !== null) {
+    await createPlaneBlockRepository(tx, scope).createForDeniedPrecheck({
+      agentId,
+      precheckReceiptId: receipt.id,
+      category: request.category,
+      rule: RULE_FOR_REASON[reason] ?? reason,
+      reason: EXPLANATION_FOR_REASON[reason] ?? reason,
+      amountUsd: request.category === 'spend' ? request.amountUsd : undefined,
+      count: request.category === 'publish' ? 1 : undefined,
+      createdAt: now,
+    });
+  }
+
   return { precheckId: receipt.id, decision, reason, replayed: false };
 }
 
@@ -255,6 +291,8 @@ describe.skipIf(!hasTestDatabase)('live precheck decisions', () => {
       .from(workspaces)
       .where(inArray(workspaces.name, ALL_NAMES));
     for (const row of rows) {
+      // Blocks first: they reference receipts.
+      await db.delete(blocks).where(eq(blocks.workspaceId, row.id));
       await db.delete(precheckReceipts).where(eq(precheckReceipts.workspaceId, row.id));
       await db.delete(ledgerDaily).where(eq(ledgerDaily.workspaceId, row.id));
       await db.delete(agentPolicies).where(eq(agentPolicies.workspaceId, row.id));
@@ -1054,6 +1092,511 @@ describe.skipIf(!hasTestDatabase)('live precheck decisions', () => {
       expect(ledger).toHaveLength(2);
     } finally {
       await cleanup(db);
+    }
+  });
+
+  it('AC-08: the denial commits a receipt AND a plane block together', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'budgeted',
+          spend: '25.000000',
+          publish: null,
+        });
+
+        const outcome = await runPrecheck(
+          tx,
+          workspaceId,
+          { actionId: 'a1', agentExternalId: 'agent-a', category: 'spend', amountUsd: '41.000000' },
+          NOW,
+        );
+        expect(outcome.decision).toBe('deny');
+
+        const blockRows = await tx.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+        expect(blockRows).toHaveLength(1);
+        const block = blockRows[0];
+
+        // Plane-owned, with no external identity.
+        expect(block?.source).toBe('plane');
+        expect(block?.externalBlockId).toBeNull();
+        // Linked to the receipt that explains it - the FK direction the Step 3
+        // schema chose, so the receipt itself never needed updating.
+        expect(block?.precheckReceiptId).toBe(outcome.precheckId);
+        expect(block?.category).toBe('spend');
+        expect(block?.rule).toBe('daily_spend_cap');
+        expect(block?.amountUsd).toBe('41.000000');
+        expect(block?.count).toBeNull();
+
+        // And the ledger is untouched.
+        const ledger = await tx
+          .select()
+          .from(ledgerDaily)
+          .where(eq(ledgerDaily.workspaceId, workspaceId));
+        expect(ledger[0]?.spendCommittedUsd).toBe('0.000000');
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it('the reverse lookup finds a receipt block', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'paused',
+          spend: null,
+          publish: null,
+        });
+
+        const outcome = await runPrecheck(
+          tx,
+          workspaceId,
+          { actionId: 'a1', agentExternalId: 'agent-a', category: 'other' },
+          NOW,
+        );
+
+        // Both directions remain queryable even though the FK is modelled once.
+        const found = await createPlaneBlockRepository(
+          tx,
+          createWorkspaceScope(workspaceId),
+        ).findByReceiptId(outcome.precheckId);
+        expect(found?.rule).toBe('agent_paused');
+        expect(found?.reason).toBe('Agent is paused.');
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it('NO BLOCK on any allowed decision', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'budgeted',
+          spend: '25.000000',
+          publish: 5,
+        });
+
+        for (const [i, category] of (['spend', 'publish', 'llm_call', 'other'] as const).entries()) {
+          const outcome = await runPrecheck(
+            tx,
+            workspaceId,
+            {
+              actionId: `a${String(i)}`,
+              agentExternalId: 'agent-a',
+              category,
+              ...(category === 'spend' ? { amountUsd: '1.000000' } : {}),
+            },
+            NOW,
+          );
+          expect(outcome.decision, category).toBe('allow');
+        }
+
+        const blockRows = await tx.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+        expect(blockRows).toEqual([]);
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it('AC-11: exactly one block for the sixth publish', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'budgeted',
+          spend: null,
+          publish: 5,
+        });
+
+        for (let i = 1; i <= 6; i += 1) {
+          await runPrecheck(
+            tx,
+            workspaceId,
+            { actionId: `p${String(i)}`, agentExternalId: 'agent-a', category: 'publish' },
+            NOW,
+          );
+        }
+
+        const blockRows = await tx.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+        expect(blockRows).toHaveLength(1);
+        expect(blockRows[0]?.rule).toBe('daily_publish_cap');
+        // Publish metadata in the count column, never the spend column.
+        expect(blockRows[0]?.count).toBe(1);
+        expect(blockRows[0]?.amountUsd).toBeNull();
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it('ATOMICITY: a failed receipt leaves no block', async () => {
+    const db = getDb();
+
+    try {
+      const { workspaceId } = await seedWorkspace(db, WORKSPACE_A_NAME, {
+        mode: 'budgeted',
+        spend: '25.000000',
+        publish: null,
+      });
+
+      // A denial with no reason violates the receipt check constraint, so the
+      // receipt insert fails inside a transaction that would have written a
+      // block.
+      await expect(
+        db.transaction(async (tx) => {
+          const scope = createWorkspaceScope(workspaceId);
+          const agentRows = await tx
+            .select({ id: agents.id })
+            .from(agents)
+            .where(eq(agents.workspaceId, workspaceId));
+          const agentId = agentRows[0]?.id ?? '';
+
+          const receipt = await createPrecheckReceiptRepository(tx, scope).insert({
+            actionId: 'a1',
+            agentId,
+            category: 'spend',
+            requestedAmountUsd: '41.000000',
+            requestedPublishCount: null,
+            decision: 'deny',
+            policyVersion: '1',
+            appliedMode: 'budgeted',
+            appliedSpendCapUsd: '25.000000',
+            appliedPublishCap: null,
+            accountingDay: DAY,
+            ledgerSpendBeforeUsd: '0.000000',
+            ledgerPublishBefore: 0,
+            remainingSpendUsd: '25.000000',
+            remainingPublishCount: null,
+            denyReason: null,
+          });
+          await createPlaneBlockRepository(tx, scope).createForDeniedPrecheck({
+            agentId,
+            precheckReceiptId: receipt.id,
+            category: 'spend',
+            rule: 'daily_spend_cap',
+            reason: 'Daily spend cap reached.',
+            amountUsd: '41.000000',
+            createdAt: NOW,
+          });
+        }),
+      ).rejects.toThrow();
+
+      const blockRows = await db.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+      const receiptRows = await db
+        .select()
+        .from(precheckReceipts)
+        .where(eq(precheckReceipts.workspaceId, workspaceId));
+      // NEITHER artifact survived.
+      expect(blockRows).toEqual([]);
+      expect(receiptRows).toEqual([]);
+    } finally {
+      await cleanup(db);
+    }
+  });
+
+  it('ATOMICITY: a failed BLOCK leaves no receipt and no ledger effect', async () => {
+    const db = getDb();
+
+    try {
+      const { workspaceId } = await seedWorkspace(db, WORKSPACE_A_NAME, {
+        mode: 'budgeted',
+        spend: '25.000000',
+        publish: null,
+      });
+
+      // An empty rule violates the block check constraint, failing the insert
+      // after the receipt has been written.
+      await expect(
+        db.transaction(async (tx) => {
+          const scope = createWorkspaceScope(workspaceId);
+          const agentRows = await tx
+            .select({ id: agents.id })
+            .from(agents)
+            .where(eq(agents.workspaceId, workspaceId));
+          const agentId = agentRows[0]?.id ?? '';
+
+          const locked = await createLedgerRepository(tx, scope).lockDailyLedger(agentId, DAY);
+          await locked?.commitSpend('5.000000');
+
+          const receipt = await createPrecheckReceiptRepository(tx, scope).insert({
+            actionId: 'a1',
+            agentId,
+            category: 'spend',
+            requestedAmountUsd: '41.000000',
+            requestedPublishCount: null,
+            decision: 'deny',
+            policyVersion: '1',
+            appliedMode: 'budgeted',
+            appliedSpendCapUsd: '25.000000',
+            appliedPublishCap: null,
+            accountingDay: DAY,
+            ledgerSpendBeforeUsd: '0.000000',
+            ledgerPublishBefore: 0,
+            remainingSpendUsd: '25.000000',
+            remainingPublishCount: null,
+            denyReason: 'daily_spend_cap_exceeded',
+          });
+          await createPlaneBlockRepository(tx, scope).createForDeniedPrecheck({
+            agentId,
+            precheckReceiptId: receipt.id,
+            category: 'spend',
+            rule: '',
+            reason: 'Daily spend cap reached.',
+            createdAt: NOW,
+          });
+        }),
+      ).rejects.toThrow();
+
+      const blockRows = await db.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+      const receiptRows = await db
+        .select()
+        .from(precheckReceipts)
+        .where(eq(precheckReceipts.workspaceId, workspaceId));
+      const ledger = await db
+        .select()
+        .from(ledgerDaily)
+        .where(eq(ledgerDaily.workspaceId, workspaceId));
+      // Every governance artifact succeeded together or not at all.
+      expect(blockRows).toEqual([]);
+      expect(receiptRows).toEqual([]);
+      expect(ledger).toEqual([]);
+    } finally {
+      await cleanup(db);
+    }
+  });
+
+  it('CONCURRENCY: two simultaneous denials of one action create ONE block', async () => {
+    const db = getDb();
+
+    try {
+      const { workspaceId } = await seedWorkspace(db, WORKSPACE_A_NAME, {
+        mode: 'paused',
+        spend: null,
+        publish: null,
+      });
+
+      const attempt = (): Promise<Outcome> =>
+        db.transaction(async (tx) =>
+          runPrecheck(
+            tx,
+            workspaceId,
+            { actionId: 'retry-1', agentExternalId: 'agent-a', category: 'other' },
+            NOW,
+          ),
+        );
+
+      const [a, b] = await Promise.all([attempt(), attempt()]);
+
+      // Both callers observe the same logical decision.
+      expect(a.precheckId).toBe(b.precheckId);
+      const receiptRows = await db
+        .select()
+        .from(precheckReceipts)
+        .where(eq(precheckReceipts.workspaceId, workspaceId));
+      const blockRows = await db.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+      expect(receiptRows).toHaveLength(1);
+      // Exactly one block - a retry must not double-record a refusal.
+      expect(blockRows).toHaveLength(1);
+    } finally {
+      await cleanup(db);
+    }
+  });
+
+  it('a CHANGED replay of a denial creates no alternate block', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'budgeted',
+          spend: '25.000000',
+          publish: 5,
+        });
+
+        await runPrecheck(
+          tx,
+          workspaceId,
+          { actionId: 'a1', agentExternalId: 'agent-a', category: 'spend', amountUsd: '41.000000' },
+          NOW,
+        );
+        await runPrecheck(
+          tx,
+          workspaceId,
+          { actionId: 'a1', agentExternalId: 'agent-a', category: 'publish' },
+          NOW,
+        );
+
+        const blockRows = await tx.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+        expect(blockRows).toHaveLength(1);
+        // The original block still describes the original refusal.
+        expect(blockRows[0]?.category).toBe('spend');
+        expect(blockRows[0]?.amountUsd).toBe('41.000000');
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it('a runtime block and a plane block coexist without colliding', async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'paused',
+          spend: null,
+          publish: null,
+        });
+        const agentRows = await tx
+          .select({ id: agents.id })
+          .from(agents)
+          .where(eq(agents.workspaceId, workspaceId));
+        const agentId = agentRows[0]?.id ?? '';
+
+        // A runtime-reported denial, as event ingest would write it.
+        await tx.insert(blocks).values({
+          workspaceId,
+          agentId,
+          source: 'runtime',
+          externalBlockId: 'client-block-1',
+          category: 'publish',
+          rule: 'client_rule',
+          reason: 'Runtime refused.',
+        });
+        // Two plane denials, both with NULL external ids.
+        for (const actionId of ['a1', 'a2']) {
+          await runPrecheck(
+            tx,
+            workspaceId,
+            { actionId, agentExternalId: 'agent-a', category: 'other' },
+            NOW,
+          );
+        }
+
+        const all = await tx.select().from(blocks).where(eq(blocks.workspaceId, workspaceId));
+        expect(all).toHaveLength(3);
+        // Multiple NULL external ids coexist under the unique constraint,
+        // because PostgreSQL treats NULLs as distinct.
+        expect(all.filter((b) => b.source === 'plane')).toHaveLength(2);
+        expect(all.filter((b) => b.source === 'runtime')).toHaveLength(1);
+        // Ownership stays unambiguous, and the runtime block is untouched.
+        expect(all.find((b) => b.source === 'runtime')?.externalBlockId).toBe('client-block-1');
+        expect(all.filter((b) => b.source === 'plane').every((b) => b.externalBlockId === null)).toBe(
+          true,
+        );
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it("CROSS-TENANT: a block cannot reference another workspace's receipt", async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const a = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'paused',
+          spend: null,
+          publish: null,
+        });
+        const b = await seedWorkspace(
+          tx,
+          WORKSPACE_B_NAME,
+          { mode: 'paused', spend: null, publish: null },
+          'bobs-agent',
+        );
+
+        const bobs = await runPrecheck(
+          tx,
+          b.workspaceId,
+          { actionId: 'bobs', agentExternalId: 'bobs-agent', category: 'other' },
+          NOW,
+        );
+
+        const aAgents = await tx
+          .select({ id: agents.id })
+          .from(agents)
+          .where(eq(agents.workspaceId, a.workspaceId));
+
+        // The composite FK to (workspace_id, id) makes this impossible at the
+        // database level, not merely in application code.
+        await expect(
+          createPlaneBlockRepository(tx, createWorkspaceScope(a.workspaceId)).createForDeniedPrecheck(
+            {
+              agentId: aAgents[0]?.id ?? '',
+              precheckReceiptId: bobs.precheckId,
+              category: 'other',
+              rule: 'agent_paused',
+              reason: 'Agent is paused.',
+              createdAt: NOW,
+            },
+          ),
+        ).rejects.toThrow();
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
+    }
+  });
+
+  it("CROSS-TENANT: the reverse lookup cannot see another workspace's block", async () => {
+    const db = getDb();
+
+    try {
+      await db.transaction(async (tx) => {
+        const a = await seedWorkspace(tx, WORKSPACE_A_NAME, {
+          mode: 'paused',
+          spend: null,
+          publish: null,
+        });
+        const b = await seedWorkspace(
+          tx,
+          WORKSPACE_B_NAME,
+          { mode: 'paused', spend: null, publish: null },
+          'bobs-agent',
+        );
+
+        const bobs = await runPrecheck(
+          tx,
+          b.workspaceId,
+          { actionId: 'bobs', agentExternalId: 'bobs-agent', category: 'other' },
+          NOW,
+        );
+
+        // Holding Bob's exact receipt id, A's scope finds nothing.
+        const found = await createPlaneBlockRepository(
+          tx,
+          createWorkspaceScope(a.workspaceId),
+        ).findByReceiptId(bobs.precheckId);
+        expect(found).toBeNull();
+
+        throw new Rollback();
+      });
+    } catch (error) {
+      if (!(error instanceof Rollback)) throw error;
     }
   });
 

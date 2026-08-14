@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-13** (Step 15 — precheck decision engine and durable receipts).
+Last updated: **2026-08-14** (Step 16 — plane-owned blocks and denial atomicity).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -140,7 +140,12 @@ confirmed against a real client-owned Neon project:
   back. **The entire commit-on-allow guarantee — the heart of the Credit
   phase — is argued and tested-but-unrun.** The production decision transaction
   has no in-process behavioural coverage at all, because it needs a database;
-  its invariants are currently held by source-level guards.
+  its invariants are currently held by source-level guards. **Step 16 raised
+  this suite to 30 tests**, adding the ones that prove a denied precheck commits
+  its receipt and its plane-owned block *together* — and that a failure in
+  either half leaves neither, with the ledger untouched. **AC-08, AC-11 and
+  AC-12 all now hinge on that transactional atomicity, and it has never been
+  observed.**
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
@@ -246,6 +251,6 @@ CI obligation can be reported as satisfied.
 | --- | --- | --- |
 | GitHub repository URL under Ashir's org | Items 1, 3, 4; AC-21 | Developer added as collaborator, not owner. |
 | Neon project + `DATABASE_URL` | Live database validation, migrations, `/readyz` | Both the **pooled** and **direct** connection strings. Supply out of band — never in Git, chat or a ticket. |
-| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05 – AC-13**, policy atomicity, ledger row-lock serialization, **precheck commit-on-allow and retry safety**, and AC-20 cross-tenant isolation — 132 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
+| A **separate** Neon branch/database + `TEST_DATABASE_URL` | **AC-05 – AC-13**, policy atomicity, ledger serialization, precheck commit-on-allow, retry safety, **and denial receipt+block atomicity** — 143 live tests currently skipped | Must NOT be the production database: these suites write data (rolled back, except a few concurrency tests that must COMMIT to observe a real race and delete their own rows afterwards). A Neon branch is ideal and cheap. The suites deliberately refuse to fall back to `DATABASE_URL`, and a guardrail test enforces that for every data-writing suite. |
 | Render account | Item 5, staging | Node 20 services per [deployment.md](deployment.md). |
 | Resend account + verified sending domain | **AC-01 magic-link delivery — now blocking** | Supply `RESEND_API_KEY` and a verified `AUTH_FROM_EMAIL`. No Resend account was created under a developer identity. Until this exists, no real sign-in email has ever been sent. |

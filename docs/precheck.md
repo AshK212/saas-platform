@@ -1,15 +1,16 @@
 # The Precheck Decision Engine
 
-> **Step 15 implements the decision and the receipt. Plane-owned blocks are
-> Step 16.**
+> **WHOEVER DENIES, RECORDS.**
 >
-> A denial produces a durable receipt but **no block row yet**. That is the only
-> enforcement gap in this step, and it is why AC-08, AC-11 and AC-12 are not
-> complete.
+> A plane denial writes a durable receipt **and** a plane-owned block, in one
+> transaction. An allow writes a receipt and no block. Complete as of Step 16.
 
 > **`spend.recorded` events still do NOT debit the authoritative ledger.** That
 > is Step 19, and it is a different path from this one. A precheck *allow* does
 > debit, immediately and in the same transaction as its receipt.
+
+> **Receipt and block presentation is Step 17.** The artifacts are durable; no
+> operator UI reads them yet.
 
 Sources: [`packages/contracts/src/precheck.ts`](../packages/contracts/src/precheck.ts) ·
 [`apps/api/src/precheck/decide.ts`](../apps/api/src/precheck/decide.ts) ·
@@ -91,11 +92,16 @@ BEGIN
   6. decide
   7. if allowed and tracked: commit usage through the locked capability
   8. insert the immutable receipt
+  9. if DENIED: insert the plane-owned block, linked to that receipt
 COMMIT
 ```
 
-Everything is one transaction. There is exactly one `db.transaction(` and one
-`receipts.insert(` in the store, and guardrail tests pin both.
+Everything is one transaction. There is exactly one `db.transaction(`, one
+`receipts.insert(` and one `createForDeniedPrecheck(` in the store, and
+guardrail tests pin all three — including that **every** repository is built on
+the transaction handle `tx`, never the pooled client `db`. A block written on
+`db` would commit on a separate connection and survive a rolled-back decision:
+false evidence that the plane refused something it never finished deciding.
 
 ### Commit-on-allow
 
@@ -231,6 +237,116 @@ negative that would read as credit.
 
 ---
 
+## Plane-owned blocks — WHOEVER DENIES, RECORDS
+
+```text
+ALLOW           DENY
+  ledger commit   no ledger commit
+  receipt         receipt
+  NO block        plane-owned block, linked to the receipt
+```
+
+### Two block owners, never confusable
+
+| | `source = 'runtime'` | `source = 'plane'` |
+| --- | --- | --- |
+| Who refused | The plugin, reporting it | The control plane, deciding it |
+| Written by | Event ingest (Step 10) | The precheck decision transaction |
+| External id | Client-supplied, deduplicated | **NULL** |
+| Module | `repositories/blocks.ts` | `repositories/plane-blocks.ts` |
+
+Each module **hardcodes** its own `source`, and in neither is `source` a
+parameter. No caller — and no future refactor passing an input object through —
+can fabricate enforcement authority the plane never exercised. There is no
+generic `createBlock`: a block claiming the plane denied something it never
+evaluated is worse than no block at all.
+
+The precheck request is unchanged and still accepts only `action_id`,
+`agent_id`, `category`, `amount_usd`. `source`, `rule`, `reason` and `block_id`
+are governance **outputs**; sending any of them is a 400.
+
+### Why plane blocks carry no external id
+
+`external_block_id` is nullable and unique per workspace. PostgreSQL treats
+NULLs as distinct, so any number of plane blocks coexist. Synthesising a value
+like `plane_<precheck_id>` would falsely imply a runtime reported it, and the
+internal UUID is already canonical.
+
+### Linkage
+
+The foreign key is modelled **once**, on `blocks.precheck_receipt_id`. That was
+a deliberate Step 3 decision and it is what makes this step simple:
+
+- no circular FK, so no deferred constraint and no insertion puzzle;
+- **the receipt stays insert-only**. Storing `block_id` on the receipt would
+  require updating it after the block is written, contradicting the
+  immutability that makes it trustworthy evidence.
+
+Order is therefore receipt → block, with nothing updated afterwards. Both
+directions remain queryable: a receipt's block is
+`blocks WHERE precheck_receipt_id = :receipt`, served by a partial index, and
+exposed as `findByReceiptId`. Because the pair is written in one transaction the
+linkage is atomic either way.
+
+### Denial evidence
+
+| | Recorded |
+| --- | --- |
+| spend | `amount_usd` = requested, `count` = null |
+| publish | `count` = 1, `amount_usd` = null |
+| paused (`other`/`llm_call`/`tool_call`) | neither |
+
+Publish counts never go in the spend column. The block carries the same
+workspace, agent, category and instant as its receipt — one decision, not two
+events milliseconds apart.
+
+### One denial vocabulary
+
+`reason` answers *what happened*; `rule` answers *which control fired*. They are
+different vocabularies so reasons can gain nuance later without renaming a
+stable governance control.
+
+```text
+daily_spend_cap_exceeded    -> daily_spend_cap     "Daily spend cap reached."
+daily_publish_cap_exceeded  -> daily_publish_cap   "Daily publish cap reached."
+paused                      -> agent_paused        "Agent is paused."
+```
+
+Defined **once** in `contracts/src/denial.ts` as a
+`Record<PrecheckDenyReason, DenialRule>`, so adding a reason without deciding
+its control fails to compile. Route code never invents a string, so the receipt,
+the block and the wire response cannot disagree about why one action was
+refused.
+
+### The block reuses the decision context
+
+No second policy read and no second ledger lock. Re-reading policy after the
+decision could populate the block from a **newer** version than the receipt
+cites, so the pair would tell inconsistent stories. The block is an audit side
+effect, not another accounting decision.
+
+### A policy change is not a denial
+
+Setting `mode = paused` creates **no block**. Blocks arise from refused
+*actions*: the next precheck denies and records one. This distinction is the
+substance of AC-12.
+
+### Replay
+
+The Step 15 idempotency boundary covers blocks too. A replay of a denied action
+returns the original receipt and creates **no second block** — including a
+replay carrying a different agent, category or amount. Historical action
+identity is not reinterpreted.
+
+### Atomicity
+
+Every governance artifact succeeds together or not at all:
+
+- a failed **block** insert rolls the receipt back — a receipt with no block
+  would misrepresent the audit trail;
+- a failed **receipt** insert leaves no block;
+- either failure leaves the ledger untouched.
+
 ## Every decision produces one receipt
 
 Allow, deny, watch, uncapped, untracked — every governance decision is recorded.
@@ -289,16 +405,18 @@ configuring itself.
 
 ---
 
-## What Step 15 does NOT do
+## What this does NOT do
 
-- **No plane-owned blocks.** A denial has a receipt but no block row. Step 16
-  implements *whoever denies, records*.
 - **No policy mutation.** The store imports the policy READ repository only; a
   guardrail asserts it cannot reach the mutation service.
-- **No events.** No `agent.action`, no `action.blocked`. The audit event stream
-  stays uncoupled until it is deliberately joined.
-- **No receipt read API or dashboard.** The response returns `precheck_id`;
-  presentation is a later step.
+- **No events.** No `agent.action`, no precheck-emitted `action.blocked`. The
+  audit event stream stays uncoupled — emitting one would risk a
+  deny → block → event → block-ingest loop that nobody designed.
+- **No runtime block is ever rewritten** by a plane decision.
+- **No receipt or block read API, and no dashboard** — Step 17. The response
+  returns `precheck_id`, and the contract deliberately does **not** expose
+  `block_id`: widening the public surface now, when a later receipt-detail
+  endpoint will carry the linkage, would be change for its own sake.
 - **No `spend.recorded` ledger debit** — Step 19.
 - **No rate limiting.** Precheck is high-frequency and a valid key can abuse it.
   Carried as a production exposure risk; correctness first.
@@ -320,8 +438,10 @@ is a known property rather than a surprise in staging.
 | --- | --- |
 | Every decision branch, cap boundaries, exact arithmetic | 51 pure-function tests |
 | Auth domain, validation, idempotency, watch/paused, atomicity, isolation | 70 route tests |
-| Ordering, allow-gate, no policy/block/event coupling, receipt immutability | boundary guards (mutation-probed) |
-| **Commit-on-allow serialization, retry-safety, real rollback, `FOR SHARE` consistency** | `packages/db/tests/precheck.live.test.ts` — **gated on `TEST_DATABASE_URL`; currently SKIPPED** |
+| Block-on-deny only, AC-08/11/12 sequences, replay, metadata, ownership, rollback | 36 block tests |
+| Ordering, allow-gate, `tx`-not-`db`, ownership hardcoding, receipt immutability | boundary guards (mutation-probed) |
+| Denial vocabulary agreement across packages | 35 cross-package tests |
+| **Commit-on-allow serialization, retry-safety, real rollback, `FOR SHARE` consistency, atomic receipt+block, cross-tenant FK refusal** | `packages/db/tests/precheck.live.test.ts` — **gated on `TEST_DATABASE_URL`; currently SKIPPED** |
 
 The production transaction body has **no in-process behavioural coverage** — it
 needs a real database. Its invariants are pinned by source-level guards until

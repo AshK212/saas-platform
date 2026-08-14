@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AgentMode, PrecheckRequest, PrecheckResponse } from '@hybrid/contracts';
+import {
+  explanationForDenyReason,
+  ruleForDenyReason,
+  type AgentMode,
+  type PrecheckRequest,
+  type PrecheckResponse,
+} from '@hybrid/contracts';
 import { toUtcAccountingDay, type AuthenticatedApiCredential } from '@hybrid/db';
 
 import { decide, requiresLedger } from '../../src/precheck/decide';
@@ -54,6 +60,22 @@ interface LedgerRow {
   publishCountCommitted: number;
 }
 
+/** A plane-owned block, as the decision transaction records it. */
+export interface StoredPlaneBlock {
+  id: string;
+  workspaceId: string;
+  agentExternalId: string;
+  source: 'plane';
+  externalBlockId: null;
+  precheckReceiptId: string;
+  category: PrecheckRequest['category'];
+  rule: string;
+  reason: string;
+  amountUsd: string | null;
+  count: number | null;
+  createdAt: Date;
+}
+
 interface PolicyRow {
   workspaceId: string;
   agentExternalId: string;
@@ -65,7 +87,12 @@ interface PolicyRow {
 export interface MemoryPrecheckStore extends PrecheckStore {
   readonly receipts: StoredReceipt[];
   readonly ledger: LedgerRow[];
+  readonly blocks: StoredPlaneBlock[];
   readonly agents: { workspaceId: string; externalId: string }[];
+  /** The block accompanying a receipt, if any. */
+  blockForReceipt(receiptId: string): StoredPlaneBlock | undefined;
+  /** Forces the block insert to fail, to exercise rollback. */
+  failBlockInsert: boolean;
   /** Stands in for provisioning. */
   seedPolicyState(workspaceId: string, version?: string): void;
   /** Stands in for the Step 13 operator mutation service. */
@@ -80,10 +107,11 @@ export interface MemoryPrecheckStore extends PrecheckStore {
 export function createMemoryPrecheckStore(): MemoryPrecheckStore {
   const receipts: StoredReceipt[] = [];
   const ledger: LedgerRow[] = [];
+  const blocks: StoredPlaneBlock[] = [];
   const agents: { workspaceId: string; externalId: string }[] = [];
   const policies: PolicyRow[] = [];
   const versions = new Map<string, string>();
-  const state = { failReceiptInsert: false };
+  const state = { failReceiptInsert: false, failBlockInsert: false };
 
   function usdAdd(a: string, b: string): string {
     // Exact micro-dollar integers, matching the production path.
@@ -98,13 +126,35 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
   return {
     receipts,
     ledger,
+    blocks,
     agents,
+
+    blockForReceipt(receiptId: string): StoredPlaneBlock | undefined {
+      return blocks.find((b) => b.precheckReceiptId === receiptId);
+    },
+
+    get failBlockInsert(): boolean {
+      return state.failBlockInsert;
+    },
+    set failBlockInsert(value: boolean) {
+      state.failBlockInsert = value;
+    },
 
     seedPolicyState(workspaceId: string, version = '1'): void {
       versions.set(workspaceId, version);
     },
     seedPolicy(policy: PolicyRow): void {
-      policies.push(policy);
+      // REPLACES any existing policy for this agent, matching what an operator
+      // mutation actually does. Appending would leave the first row winning
+      // the lookup, so a test that "unpauses" would silently still be paused.
+      const existing = policies.findIndex(
+        (p) => p.workspaceId === policy.workspaceId && p.agentExternalId === policy.agentExternalId,
+      );
+      if (existing >= 0) {
+        policies[existing] = policy;
+      } else {
+        policies.push(policy);
+      }
       if (!agents.some((a) => a.workspaceId === policy.workspaceId && a.externalId === policy.agentExternalId)) {
         agents.push({ workspaceId: policy.workspaceId, externalId: policy.agentExternalId });
       }
@@ -136,6 +186,19 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
       // Snapshot for rollback - production is one transaction.
       const ledgerSnapshot = ledger.map((r) => ({ ...r }));
       const agentSnapshot = agents.map((a) => ({ ...a }));
+      const receiptSnapshot = [...receipts];
+      const blockSnapshot = [...blocks];
+
+      const rollback = (): void => {
+        ledger.length = 0;
+        ledger.push(...ledgerSnapshot);
+        agents.length = 0;
+        agents.push(...agentSnapshot);
+        receipts.length = 0;
+        receipts.push(...receiptSnapshot);
+        blocks.length = 0;
+        blocks.push(...blockSnapshot);
+      };
 
       // 1. IDEMPOTENCY, before anything else.
       const existing = receipts.find(
@@ -225,10 +288,7 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
       // 7. Durable receipt, same transaction.
       if (state.failReceiptInsert) {
         // Roll the debit back with it: neither half may survive alone.
-        ledger.length = 0;
-        ledger.push(...ledgerSnapshot);
-        agents.length = 0;
-        agents.push(...agentSnapshot);
+        rollback();
         return Promise.reject(new Error('receipt insert failed'));
       }
 
@@ -254,6 +314,32 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
         denyReason: decision.reason ?? null,
       };
       receipts.push(receipt);
+
+      // 8. WHOEVER DENIES, RECORDS. A plane denial writes its block in the
+      //    same transaction, linked to the receipt just inserted. An allow
+      //    writes none.
+      if (!decision.allow && decision.reason !== undefined) {
+        if (state.failBlockInsert) {
+          // The receipt must not survive a denial whose block failed.
+          rollback();
+          return Promise.reject(new Error('block insert failed'));
+        }
+
+        blocks.push({
+          id: randomUUID(),
+          workspaceId,
+          agentExternalId: request.agent_id,
+          source: 'plane',
+          externalBlockId: null,
+          precheckReceiptId: receipt.id,
+          category: request.category,
+          rule: ruleForDenyReason(decision.reason),
+          reason: explanationForDenyReason(decision.reason),
+          amountUsd: request.category === 'spend' ? (request.amount_usd ?? null) : null,
+          count: request.category === 'publish' ? 1 : null,
+          createdAt: now,
+        });
+      }
 
       return Promise.resolve({
         response: {

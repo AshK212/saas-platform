@@ -2,7 +2,7 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 15, precheck decision engine.**
+**Current phase: Credit — Step 16, plane-owned blocks.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
@@ -10,21 +10,23 @@ the agent registry, idempotent event ingest via `POST /v1/events`, the operator
 event timeline with raw JSON drill-through, machine policy polling via
 `GET /v1/policy`, operator policy configuration with atomic versioning, the
 authoritative per-agent UTC-day ledger with exact micro-dollar arithmetic, and
-the governance decision engine at `POST /v1/actions/precheck`.
+the governance decision engine at `POST /v1/actions/precheck` with plane-owned
+blocks for every denial.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
-plane-owned blocks, no exports, rollups, sharing or demo. **Being signed in
-grants access to no workspace** — tenant access comes only from a membership,
-re-proven on every request.
+receipt or block presentation, no exports, rollups, sharing or demo. **Being
+signed in grants access to no workspace** — tenant access comes only from a
+membership, re-proven on every request.
 
-> **Spend and publish caps are now enforced.** A precheck compares the cap to
-> authoritative committed usage under a row lock, allows or denies, debits on
-> allow, and records a durable receipt for **every** decision — all in one
-> transaction. A denial never moves the ledger; `watch` allows without
-> recording. See [precheck](docs/precheck.md).
+> **WHOEVER DENIES, RECORDS.** A precheck compares the cap to authoritative
+> committed usage under a row lock, allows or denies, debits on allow, and
+> records a durable receipt for **every** decision. A denial additionally writes
+> a plane-owned block linked to that receipt — both in one transaction, or
+> neither. A denial never moves the ledger; `watch` allows without recording.
+> See [precheck](docs/precheck.md).
 >
-> **A denial does not yet create a plane-owned block.** That is the one
-> enforcement gap, and it arrives in the next step.
+> **Nothing displays these artifacts yet.** Receipt and block presentation
+> arrives in the next step.
 
 > **Machine keys write; browser sessions read.** `POST /v1/events` accepts only
 > a bearer API key. The timeline accepts only a session cookie. A machine that
@@ -265,10 +267,11 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 15: plane-owned blocks for
-precheck denials, receipt and block presentation UI, event-driven spend debit,
-CSV/JSON export, daily rollups and charts, gone-dark detection, share links, the
-public demo, simulator scenarios, and any Hermes/OpenClaw runtime integration.
+The following are **deliberately absent** as of Step 16: receipt and block
+presentation UI, fleet enforcement state, event-driven spend debit, block email
+alerts, CSV/JSON export, daily rollups and charts, gone-dark detection, share
+links, the public demo, simulator scenarios, and any Hermes/OpenClaw runtime
+integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

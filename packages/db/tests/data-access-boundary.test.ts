@@ -261,6 +261,7 @@ describe('every repository source file scopes its queries', () => {
     'blocks.ts',
     'events.ts',
     'ledger.ts',
+    'plane-blocks.ts',
     'policy-mutation.ts',
     'receipts.ts',
   ];
@@ -1086,17 +1087,153 @@ describe('mutation surface stays narrow and scoped', () => {
     expect(code).toContain('createPolicyReadRepository');
   });
 
-  it('the precheck store creates no blocks and no events', () => {
+  it('the precheck store creates no RUNTIME blocks and no events', () => {
     const store = readFileSync(
       path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
       'utf8',
     );
     const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-    // Plane-owned blocks are Step 16; the audit event stream stays uncoupled.
+    // Step 16 added PLANE blocks. The runtime block writer stays out of reach:
+    // a decision must never rewrite a block a plugin reported. The audit event
+    // stream also stays uncoupled - no precheck-emitted `action.blocked`.
     expect(code).not.toContain('createBlockRepository');
-    expect(code).not.toContain('createEventRepository');
     expect(code).not.toContain('resolveOrCreateRuntimeBlock');
+    expect(code).not.toContain('createEventRepository');
+    expect(code).toContain('createPlaneBlockRepository');
+  });
+
+  it('A PLANE BLOCK IS WRITTEN ONLY ON A DENIAL', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // An allow must produce no block. The production transaction body has no
+    // in-process behavioural coverage - it needs a database - so the gate is
+    // pinned at the source.
+    expect(code).toMatch(/if \(!decision\.allow && decision\.reason !== undefined\) \{/);
+    expect((code.match(/createForDeniedPrecheck\(/g) ?? []).length).toBe(1);
+  });
+
+  it('THE BLOCK IS WRITTEN IN THE SAME TRANSACTION, AFTER THE RECEIPT', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Still exactly one transaction wrapping the whole decision, so a failed
+    // block insert rolls the receipt back and vice versa.
+    expect((code.match(/db\.transaction\(/g) ?? []).length).toBe(1);
+    // Receipt first: the FK lives only on the block, so nothing needs updating
+    // afterwards and the receipt stays insert-only.
+    expect(code.indexOf('receipts.insert(')).toBeLessThan(
+      code.indexOf('createForDeniedPrecheck('),
+    );
+    // And the block references that receipt.
+    expect(code).toContain('precheckReceiptId: receipt.id');
+
+    // EVERY repository in the decision is built on the transaction handle
+    // `tx`, never the pooled client `db`. A block written on `db` would commit
+    // on a separate connection and SURVIVE a rolled-back decision - false
+    // evidence that the plane refused something it never finished deciding.
+    const builders = code.match(/create\w+(?:Repository|Service)\((\w+),/g) ?? [];
+    expect(builders.length).toBeGreaterThan(0);
+    for (const builder of builders) {
+      expect(builder, builder).toContain('(tx,');
+    }
+    // `db` appears exactly once: opening the transaction.
+    expect((code.match(/\bdb\./g) ?? []).length).toBe(1);
+    expect(code).toContain('db.transaction(');
+  });
+
+  it('the block uses the SHARED denial vocabulary, not ad-hoc strings', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // One mapping, so the receipt, the block and the wire response cannot
+    // disagree about why the same action was refused.
+    expect(code).toContain('ruleForDenyReason(decision.reason)');
+    expect(code).toContain('explanationForDenyReason(decision.reason)');
+    // No literal rule strings anywhere in the store.
+    expect(code).not.toMatch(/rule:\s*'/);
+  });
+
+  it('the block reuses the decision context - no second policy read', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Re-reading policy after the decision could populate the block from a
+    // NEWER version than the receipt cites, so the pair would tell
+    // inconsistent stories.
+    expect((code.match(/lockPolicyForDecision\(/g) ?? []).length).toBe(1);
+    // And no second ledger lock: the block is an audit side effect, not
+    // another accounting decision.
+    expect((code.match(/lockDailyLedger\(/g) ?? []).length).toBe(1);
+    // The block shares the receipt's decision instant.
+    expect(code).toContain('createdAt: now');
+  });
+
+  it('PLANE AND RUNTIME BLOCK OWNERSHIP CANNOT BE CONFUSED', () => {
+    const planeSource = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'plane-blocks.ts'),
+      'utf8',
+    );
+    const runtimeSource = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'blocks.ts'),
+      'utf8',
+    );
+    const plane = planeSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    const runtime = runtimeSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Each hardcodes its own source and neither accepts one as a parameter, so
+    // no caller can fabricate enforcement authority the plane never exercised.
+    expect(plane).toContain("source: 'plane'");
+    expect(plane).not.toContain("source: 'runtime'");
+    expect(runtime).toContain("source: 'runtime'");
+    expect(runtime).not.toContain("source: 'plane'");
+    for (const code of [plane, runtime]) {
+      expect(code).not.toMatch(/source:\s*input\.|source:\s*\w*[Ss]ource\b/);
+    }
+    // And neither module exposes a generic writer.
+    expect(plane).not.toMatch(/\bcreateBlock\s*\(/);
+  });
+
+  it('plane blocks are immutable and workspace-anchored', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'plane-blocks.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Historical evidence of a refusal. No update, no delete, no upsert.
+    expect(code).not.toMatch(/\.update\(|\.delete\(|onConflictDoUpdate/);
+    expect(code).toContain('workspaceId: scope.workspaceId');
+    expect(code).not.toMatch(/workspaceId\s*:\s*string\s*[,)]/);
+    // Composes into the caller's transaction; never opens its own.
+    expect(code).not.toMatch(/\.transaction\(/);
+    expect(code).toContain('executor: DatabaseExecutor');
+  });
+
+  it('a plane block carries no external id', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'plane-blocks.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Synthesising one would falsely imply a runtime reported it. The column
+    // is nullable and PostgreSQL treats NULLs as distinct, so any number of
+    // plane blocks coexist under the external-id unique constraint.
+    expect(code).toContain('externalBlockId: null');
   });
 
   it('agent writes are workspace-anchored', () => {

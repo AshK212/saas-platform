@@ -1,7 +1,13 @@
-import type { PrecheckRequest, PrecheckResponse } from '@hybrid/contracts';
+import {
+  explanationForDenyReason,
+  ruleForDenyReason,
+  type PrecheckRequest,
+  type PrecheckResponse,
+} from '@hybrid/contracts';
 import {
   createAgentRepository,
   createLedgerRepository,
+  createPlaneBlockRepository,
   createPolicyReadRepository,
   createPrecheckLockRepository,
   createPrecheckReceiptRepository,
@@ -225,6 +231,35 @@ export function createDrizzlePrecheckStore(db: DatabaseClient): PrecheckStore {
             decision.remaining?.kind === 'publish' ? decision.remaining.value : null,
           denyReason: decision.reason ?? null,
         });
+
+        // ── 8. WHOEVER DENIES, RECORDS ────────────────────────────────────
+        // A plane denial writes its own block, in THIS transaction, linked to
+        // the receipt just inserted. Same instant, same decision context - no
+        // second policy read, so the block cannot tell a different story from
+        // the receipt it explains.
+        //
+        // An ALLOW writes no block. Gated on `decision.reason`, which the
+        // decision sets only when it refuses.
+        if (!decision.allow && decision.reason !== undefined) {
+          await createPlaneBlockRepository(tx, scope).createForDeniedPrecheck({
+            agentId: agent.id,
+            // Receipt-first ordering: the FK lives only on the block, so
+            // nothing needs updating afterwards and the receipt stays
+            // insert-only.
+            precheckReceiptId: receipt.id,
+            category: request.category,
+            // The SINGLE shared mapping. Route code never invents a string, so
+            // the receipt, the block and the wire response cannot disagree
+            // about why the action was refused.
+            rule: ruleForDenyReason(decision.reason),
+            reason: explanationForDenyReason(decision.reason),
+            // Denial evidence, recorded only where it means something: an
+            // amount for a spend refusal, a count for a publish refusal.
+            amountUsd: request.category === 'spend' ? request.amount_usd : undefined,
+            count: request.category === 'publish' ? 1 : undefined,
+            createdAt: now,
+          });
+        }
 
         return { response: decisionToResponse(receipt.id, decision), replayed: false };
       });

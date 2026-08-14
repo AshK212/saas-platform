@@ -1,7 +1,13 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { decimalUsdSchema } from '@hybrid/contracts';
+import {
+  decimalUsdSchema,
+  denialRuleSchema,
+  explanationForDenyReason,
+  precheckDenyReasonSchema,
+  ruleForDenyReason,
+} from '@hybrid/contracts';
 import { MAX_USD_MICROS, MoneyError, formatUsdFromMicros, parseUsdToMicros } from '@hybrid/db';
 import { describe, expect, it } from 'vitest';
 
@@ -94,6 +100,46 @@ describe('the wire contract and the ledger agree on what money is', () => {
     // back as `25.000000` compare equal without normalisation at every site.
     for (const value of VALID) {
       expect(formatUsdFromMicros(parseUsdToMicros(value))).toMatch(/^\d+\.\d{6}$/);
+    }
+  });
+});
+
+describe('the denial vocabulary agrees across packages', () => {
+  /**
+   * `packages/db` cannot import `@hybrid/contracts`, so its live precheck
+   * suite transcribes the reason -> rule mapping. A drift would mean the
+   * transcription no longer tests what production does.
+   */
+  it('the live suite transcription matches the shared mapping', () => {
+    const liveSource = readFileSync(
+      path.resolve(API_ROOT, '..', '..', 'packages', 'db', 'tests', 'precheck.live.test.ts'),
+      'utf8',
+    );
+
+    for (const reason of precheckDenyReasonSchema.options) {
+      const rule = ruleForDenyReason(reason);
+      const explanation = explanationForDenyReason(reason);
+      expect(liveSource, `${reason} -> ${rule}`).toContain(`${reason}: '${rule}'`);
+      expect(liveSource, `${reason} explanation`).toContain(`${reason}: '${explanation}'`);
+    }
+  });
+
+  it('every deny reason maps to a rule', () => {
+    // The mapping is `Record<PrecheckDenyReason, DenialRule>`, so a new reason
+    // cannot be added without deciding which control it belongs to. This
+    // asserts the runtime side of that.
+    for (const reason of precheckDenyReasonSchema.options) {
+      expect(denialRuleSchema.options, reason).toContain(ruleForDenyReason(reason));
+      expect(explanationForDenyReason(reason).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('rules and reasons are distinct vocabularies', () => {
+    // `reason` answers what happened; `rule` answers which control fired.
+    // Collapsing them would lose the ability to add reason nuance later
+    // without renaming a stable governance control.
+    for (const reason of precheckDenyReasonSchema.options) {
+      expect(denialRuleSchema.options).not.toContain(reason as never);
     }
   });
 });

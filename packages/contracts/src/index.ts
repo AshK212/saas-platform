@@ -64,6 +64,12 @@ export type {
   ValidationIssue,
 } from './events.js';
 export {
+  denialRuleSchema,
+  explanationForDenyReason,
+  ruleForDenyReason,
+} from './denial.js';
+export type { DenialRule } from './denial.js';
+export {
   precheckDecisionSchema,
   precheckDenyReasonSchema,
   precheckErrorSchema,
