@@ -25,6 +25,29 @@ import {
   workspaceBlocksPath,
   workspaceReceiptPath,
   workspaceReceiptsPath,
+  workspaceShareLinksPath,
+  revokeShareLinkPath,
+  shareLinkCreatedResponseSchema,
+  shareLinkListResponseSchema,
+  SHARE_ACCESS_PATH,
+  SHARE_AGENTS_PATH,
+  SHARE_BLOCKS_PATH,
+  SHARE_EVENTS_PATH,
+  SHARE_RECEIPTS_PATH,
+  shareAccessResponseSchema,
+  shareAgentListResponseSchema,
+  shareBlockListResponseSchema,
+  shareEventDetailResponseSchema,
+  shareEventListResponseSchema,
+  shareEventPath,
+  shareReceiptListResponseSchema,
+  type ShareAccessResponse,
+  type ShareAgentListResponse,
+  type ShareBlockListResponse,
+  type ShareEventListResponse,
+  type ShareLinkCreatedResponse,
+  type ShareLinkSummary,
+  type ShareReceiptListResponse,
   type BlockDetail,
   type BlockListResponse,
   type ReceiptDetail,
@@ -466,4 +489,141 @@ export async function openWorkspace(workspaceId: string): Promise<WorkspaceSumma
 
   const parsed = workspaceResponseSchema.safeParse(await response.json());
   return parsed.success ? parsed.data.workspace : null;
+}
+
+// ─── Read-only workspace sharing (AC-18) ────────────────────────────────────
+
+/**
+ * Issues a share link. OPERATOR ONLY.
+ *
+ * The plaintext token in the response is the ONLY copy that will ever exist -
+ * the server kept a digest. It is returned to the caller and never written to
+ * localStorage, sessionStorage or any other persistent store.
+ */
+export async function createShareLink(workspaceId: string): Promise<ShareLinkCreatedResponse> {
+  const response = await fetch(workspaceShareLinksPath(workspaceId), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Only an operator can create a share link.'
+        : 'Could not create the share link.',
+    );
+  }
+
+  const parsed = shareLinkCreatedResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data;
+}
+
+/** Lists share links. Metadata only - no token is recoverable. */
+export async function listShareLinks(workspaceId: string): Promise<ShareLinkSummary[]> {
+  const response = await fetch(workspaceShareLinksPath(workspaceId), {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new Error('Could not load share links.');
+  }
+  const parsed = shareLinkListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.shareLinks : [];
+}
+
+/** Revokes a share link. Idempotent. */
+export async function revokeShareLink(
+  workspaceId: string,
+  shareId: string,
+): Promise<ShareLinkSummary | null> {
+  const response = await fetch(revokeShareLinkPath(workspaceId, shareId), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error('Could not revoke the share link.');
+  }
+  const parsed = shareLinkListResponseSchema.safeParse(await response.json());
+  return parsed.success ? (parsed.data.shareLinks[0] ?? null) : null;
+}
+
+// ─── The public shared view ─────────────────────────────────────────────────
+
+/**
+ * Exchanges a share token for a viewing cookie.
+ *
+ * The token is POSTed in a BODY and then forgotten by this module. It is never
+ * kept in component state beyond this call, never written to any browser
+ * storage, and never appended to a later request - the HttpOnly cookie the
+ * server sets carries the session from here on.
+ */
+export async function openShare(token: string): Promise<ShareAccessResponse | null> {
+  const response = await fetch(SHARE_ACCESS_PATH, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareAccessResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+/** The shared fleet. Null means the link is dead - revoked, or never valid. */
+export async function fetchSharedAgents(): Promise<ShareAgentListResponse | null> {
+  const response = await fetch(SHARE_AGENTS_PATH, { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareAgentListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+/** The shared timeline. */
+export async function fetchSharedEvents(
+  cursor?: string,
+): Promise<ShareEventListResponse | null> {
+  const query = cursor === undefined || cursor === '' ? '' : `?cursor=${encodeURIComponent(cursor)}`;
+  const response = await fetch(`${SHARE_EVENTS_PATH}${query}`, { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareEventListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+/** One shared event, with its validated raw payload. */
+export async function fetchSharedEvent(eventId: string): Promise<EventDetail | null> {
+  const response = await fetch(shareEventPath(eventId), { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareEventDetailResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.event : null;
+}
+
+/** Shared governance decisions. */
+export async function fetchSharedReceipts(): Promise<ShareReceiptListResponse | null> {
+  const response = await fetch(SHARE_RECEIPTS_PATH, { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareReceiptListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+/** Shared blocks. */
+export async function fetchSharedBlocks(): Promise<ShareBlockListResponse | null> {
+  const response = await fetch(SHARE_BLOCKS_PATH, { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = shareBlockListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
 }

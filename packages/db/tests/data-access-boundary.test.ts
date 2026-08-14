@@ -79,6 +79,11 @@ describe('trusted scope construction cannot be bypassed', () => {
     // Source-level guard: catches even an unexported deep import. Comments are
     // stripped first, so documentation that names the forbidden function -
     // explaining why handlers must not call it - is not a false positive.
+    //
+    // Scoped to `src/`, because the rule is about application CODE. A test
+    // asserting that the db resolver builds its scope correctly must be able
+    // to name the constructor in an expectation, and a fake must be able to
+    // brand a scope value; neither is a handler reaching for real authority.
     const appsDir = path.resolve(PACKAGE_ROOT, '..', '..', 'apps');
     const offenders: string[] = [];
 
@@ -89,7 +94,9 @@ describe('trusted scope construction cannot be bypassed', () => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+          if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'tests') {
+            continue;
+          }
           walk(full);
           continue;
         }
@@ -264,6 +271,7 @@ describe('every repository source file scopes its queries', () => {
     'plane-blocks.ts',
     'policy-mutation.ts',
     'receipts.ts',
+    'share-tokens.ts',
   ];
 
   /**
@@ -373,7 +381,53 @@ describe('resolvers are the only unscoped reads, and stay bounded', () => {
       'findWorkspaceById',
       'listMembershipsForUser',
       'listWorkspacesForUser',
+      // Discovers a workspace from a presented share token. Cannot take a
+      // scope, because producing one is its purpose - the AC-18 analogue of
+      // credential resolution.
+      'resolveShareToken',
     ]);
+  });
+
+  it('the share resolver exposes no cross-tenant search', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'resolvers', 'share-tokens.ts'),
+      'utf8',
+    );
+
+    // Possession of a valid token is the only way in: one query, matching on
+    // prefix AND hash AND not-revoked. No "list shares", no "find by
+    // workspace" - nothing here can be enumerated.
+    expect((source.match(/\.select\(/g) ?? []).length).toBe(1);
+    expect(source).toContain('eq(shareTokens.tokenPrefix, tokenPrefix)');
+    expect(source).toContain('eq(shareTokens.tokenHash, tokenHash)');
+    // Revocation is checked in the SAME statement, so it takes effect at once.
+    expect(source).toContain('isNull(shareTokens.revokedAt)');
+  });
+
+  it('builds the share scope from the row, never from an argument', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'resolvers', 'share-tokens.ts'),
+      'utf8',
+    );
+
+    // A share token is bound to exactly one workspace, permanently. The
+    // function takes no workspace argument, so a caller has nothing to steer.
+    expect(source).toContain('createWorkspaceScope(row.workspaceId)');
+    expect(source).not.toMatch(/workspaceId\s*:\s*string\s*[,)]/);
+  });
+
+  it('THE SHARE RESOLVER NEVER RETURNS SECRET MATERIAL', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'resolvers', 'share-tokens.ts'),
+      'utf8',
+    );
+
+    // The projection selects an id, a workspace id and a display name. A
+    // digest reaching the application layer would be one careless log line
+    // away from disclosure, and serves no purpose above this function.
+    const projection = source.slice(source.indexOf('.select({'), source.indexOf('.from('));
+    expect(projection).not.toContain('tokenHash');
+    expect(projection).not.toContain('tokenPrefix');
   });
 
   it('the credential resolver exposes no cross-tenant search', () => {

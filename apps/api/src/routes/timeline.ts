@@ -3,15 +3,15 @@ import {
   TIMELINE_DEFAULT_LIMIT,
   timelineQuerySchema,
   timelineResponseSchema,
-  type EventSummary,
 } from '@hybrid/contracts';
-import type { EventDetailRow, TimelineEventRow } from '@hybrid/db';
+import type { EventDetailRow } from '@hybrid/db';
 import { Hono, type Context } from 'hono';
 
 import { requireAuthenticatedUser } from '../auth/middleware.js';
 import type { AuthService } from '../auth/service.js';
 import { decodeCursor, encodeCursor } from '../events/cursor.js';
 import type { EventReadStore } from '../events/read-store.js';
+import { toEventDetail, toEventSummary } from '../read-models.js';
 import type { WorkspaceStore } from '../workspaces/store.js';
 
 /**
@@ -60,33 +60,6 @@ export interface TimelineRouteOptions {
   readonly eventReadStore: EventReadStore | undefined;
   readonly workspaceStore: WorkspaceStore | undefined;
   readonly authService: AuthService | undefined;
-}
-
-/** Maps a stored row to the operator-facing summary. */
-function toSummary(row: TimelineEventRow): EventSummary {
-  return {
-    id: row.id,
-    eventId: row.eventId,
-    agent: {
-      id: row.agent.id,
-      agentId: row.agent.externalId,
-      name: row.agent.displayName,
-    },
-    type: row.type,
-    category: row.category,
-    // Client-reported and untrusted; surfaced as metadata, never as authority.
-    occurredAt: row.occurredAt?.toISOString() ?? null,
-    receivedAt: row.receivedAt.toISOString(),
-    precheckId: row.precheckReceiptId,
-    block:
-      row.block === null
-        ? null
-        : {
-            id: row.block.id,
-            externalBlockId: row.block.externalBlockId,
-            source: row.block.source,
-          },
-  };
 }
 
 export function createTimelineRoutes(options: TimelineRouteOptions): Hono {
@@ -154,7 +127,7 @@ export function createTimelineRoutes(options: TimelineRouteOptions): Hono {
       cursor = decoded;
     }
 
-    const page = await eventReadStore.listTimeline(gate.authorized, {
+    const page = await eventReadStore.listTimeline(gate.authorized.scope, {
       limit: parsed.data.limit ?? TIMELINE_DEFAULT_LIMIT,
       agentExternalId: parsed.data.agent_id,
       cursor,
@@ -162,7 +135,7 @@ export function createTimelineRoutes(options: TimelineRouteOptions): Hono {
 
     return c.json(
       timelineResponseSchema.parse({
-        events: page.events.map(toSummary),
+        events: page.events.map(toEventSummary),
         nextCursor: page.nextCursor === null ? null : encodeCursor(page.nextCursor),
       }),
     );
@@ -196,20 +169,13 @@ export function createTimelineRoutes(options: TimelineRouteOptions): Hono {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }
 
-    const row: EventDetailRow | null = await eventReadStore.findDetail(gate.authorized, eventId);
+    const row: EventDetailRow | null = await eventReadStore.findDetail(gate.authorized.scope, eventId);
     if (row === null) {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }
 
     return c.json(
-      eventDetailResponseSchema.parse({
-        event: {
-          ...toSummary(row),
-          // The VALIDATED event object as stored - not raw request bytes and
-          // not headers. No credential material ever reached it.
-          raw: row.payload,
-        },
-      }),
+      eventDetailResponseSchema.parse({ event: toEventDetail(row) }),
     );
   });
 

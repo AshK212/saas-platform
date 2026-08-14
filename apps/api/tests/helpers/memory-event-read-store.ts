@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AuthorizedWorkspace, EventDetailRow, TimelineEventRow } from '@hybrid/db';
+import type { EventDetailRow, TimelineEventRow, WorkspaceScope } from '@hybrid/db';
 
 import type {
   EventReadStore,
@@ -128,10 +128,10 @@ export function createMemoryEventReadStore(): MemoryEventReadStore {
     },
 
     listTimeline(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       options: TimelineQueryOptions,
     ): Promise<TimelinePage> {
-      const workspaceId = authorized.scope.workspaceId;
+      const workspaceId = scope.workspaceId;
 
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
@@ -176,10 +176,10 @@ export function createMemoryEventReadStore(): MemoryEventReadStore {
     },
 
     findDetail(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       eventId: string,
     ): Promise<EventDetailRow | null> {
-      const workspaceId = authorized.scope.workspaceId;
+      const workspaceId = scope.workspaceId;
       // Scoped: another tenant's uuid resolves to null, not to their row.
       const row = rows.find((r) => r.workspaceId === workspaceId && r.id === eventId);
       return Promise.resolve(row ?? null);

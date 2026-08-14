@@ -5,6 +5,7 @@ import { Agents } from './Agents';
 import { createWorkspace, listWorkspaces, openWorkspace } from './api';
 import { ApiKeys } from './ApiKeys';
 import { Governance } from './Governance';
+import { ShareLinks } from './ShareLinks';
 import { Timeline } from './Timeline';
 
 /**
@@ -169,6 +170,14 @@ export function Workspaces(): JSX.Element {
 
           <div className="border-t border-slate-800 pt-5">
             <Timeline key={`timeline-${selected.id}`} workspaceId={selected.id} />
+          </div>
+
+          <div className="border-t border-slate-800 pt-5">
+            <ShareLinks
+              key={`shares-${selected.id}`}
+              workspaceId={selected.id}
+              canManage={selected.role === 'operator'}
+            />
           </div>
 
           <div className="border-t border-slate-800 pt-5">

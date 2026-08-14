@@ -246,3 +246,48 @@ export {
 } from './readiness.js';
 export type { DependencyReadiness, ReadinessResponse } from './readiness.js';
 export { PLATFORM_NAME, CONTRACTS_VERSION } from './platform.js';
+
+// ─── Read-only workspace sharing (AC-18) ────────────────────────────────────
+export {
+  createShareLinkRequestSchema,
+  MAX_SHARE_TOKEN_LENGTH,
+  revokeShareLinkPath,
+  SHARE_ACCESS_PATH,
+  SHARE_AGENTS_PATH,
+  SHARE_BLOCKS_PATH,
+  SHARE_EVENTS_PATH,
+  SHARE_RECEIPTS_PATH,
+  SHARE_WORKSPACE_PATH,
+  shareAccessRequestSchema,
+  shareAccessResponseSchema,
+  shareAgentListResponseSchema,
+  shareAgentSchema,
+  shareBlockListResponseSchema,
+  shareErrorSchema,
+  shareEventDetailResponseSchema,
+  shareEventListResponseSchema,
+  shareEventPath,
+  shareLinkCreatedResponseSchema,
+  shareLinkListResponseSchema,
+  shareLinkSummarySchema,
+  shareReceiptListResponseSchema,
+  shareViewPath,
+  shareWorkspaceSchema,
+  workspaceShareLinksPath,
+} from './share.js';
+export type {
+  CreateShareLinkRequest,
+  ShareAccessRequest,
+  ShareAccessResponse,
+  ShareAgent,
+  ShareAgentListResponse,
+  ShareBlockListResponse,
+  ShareError,
+  ShareEventDetailResponse,
+  ShareEventListResponse,
+  ShareLinkCreatedResponse,
+  ShareLinkListResponse,
+  ShareLinkSummary,
+  ShareReceiptListResponse,
+  ShareWorkspace,
+} from './share.js';

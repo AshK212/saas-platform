@@ -5,7 +5,7 @@ import {
   toUtcAccountingDay,
   type AuditBlockRow,
   type AuditReceiptRow,
-  type AuthorizedWorkspace,
+  type WorkspaceScope,
 } from '@hybrid/db';
 
 import type {
@@ -181,8 +181,8 @@ export function createMemoryGovernanceStore(): MemoryGovernanceStore {
       return JSON.stringify({ agents, policies, ledger, receipts, blocks });
     },
 
-    listFleet(authorized: AuthorizedWorkspace, now: Date): Promise<FleetAgent[]> {
-      const workspaceId = authorized.scope.workspaceId;
+    listFleet(scope: WorkspaceScope, now: Date): Promise<FleetAgent[]> {
+      const workspaceId = scope.workspaceId;
       // ONE server clock reading for the whole roster.
       const day = toUtcAccountingDay(now);
 
@@ -222,10 +222,10 @@ export function createMemoryGovernanceStore(): MemoryGovernanceStore {
     },
 
     listReceipts(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       options: ReceiptQueryOptions,
     ): Promise<ReceiptPage> {
-      const workspaceId = authorized.scope.workspaceId;
+      const workspaceId = scope.workspaceId;
 
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
@@ -282,16 +282,16 @@ export function createMemoryGovernanceStore(): MemoryGovernanceStore {
     },
 
     async findReceipt(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       receiptId: string,
     ): Promise<AuditReceiptRow | null> {
       // Scoped: another tenant's uuid resolves to null, not to their row.
-      const page = await this.listReceipts(authorized, { limit: 1_000 });
+      const page = await this.listReceipts(scope, { limit: 1_000 });
       return page.receipts.find((r) => r.id === receiptId) ?? null;
     },
 
-    listBlocks(authorized: AuthorizedWorkspace, options: BlockQueryOptions): Promise<BlockPage> {
-      const workspaceId = authorized.scope.workspaceId;
+    listBlocks(scope: WorkspaceScope, options: BlockQueryOptions): Promise<BlockPage> {
+      const workspaceId = scope.workspaceId;
 
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
@@ -336,10 +336,10 @@ export function createMemoryGovernanceStore(): MemoryGovernanceStore {
     },
 
     async findBlock(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       blockId: string,
     ): Promise<AuditBlockRow | null> {
-      const page = await this.listBlocks(authorized, { limit: 1_000 });
+      const page = await this.listBlocks(scope, { limit: 1_000 });
       return page.blocks.find((b) => b.id === blockId) ?? null;
     },
   };

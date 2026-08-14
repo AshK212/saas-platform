@@ -2,7 +2,7 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 20, the reference client.**
+**Current phase: Credit — Step 21, revocable read-only sharing.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
@@ -14,7 +14,8 @@ governance decision engine at `POST /v1/actions/precheck` with plane-owned
 blocks for every denial, the operator governance surface — fleet enforcement
 state, decision receipts and block detail — and authoritative spend accounting
 from both the precheck and the event path with a no-double-debit guarantee, and a
-reference client that drives the whole Credit flow over the public API.
+reference client that drives the whole Credit flow over the public API, and
+revocable read-only share links.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
 exports, rollups, sharing, gone-dark alerting or demo. **Being signed in grants
@@ -34,6 +35,13 @@ on every request.
 > not rewrite yesterday's denial. The browser derives no enforcement state: no
 > `parseFloat`, no `toFixed`, no comparison of a total to a cap.
 > See [governance visibility](docs/governance-visibility.md).
+
+> **A SHARE LINK READS ONE WORKSPACE AND NOTHING ELSE.** An operator issues a
+> high-entropy link whose plaintext is shown once and stored only as a digest.
+> It opens in a private window with no sign-in and no edit controls, and it
+> authorizes no mutation of any kind. Revoking it kills access on the viewer's
+> next request — every read re-resolves the token, so there is no cached
+> decision to outlive it. See [read-only sharing](docs/sharing.md).
 
 > **Machine keys write; browser sessions read.** `POST /v1/events` accepts only
 > a bearer API key. The timeline accepts only a session cookie. A machine that
@@ -276,6 +284,7 @@ behind that prefix.
 - [Precheck](docs/precheck.md) — the governance decision, commit-on-allow, idempotency, and durable receipts
 - [Governance visibility](docs/governance-visibility.md) — fleet enforcement state, receipt and block audit, and why nothing is recomputed
 - [Reference client](docs/simulator.md) — the documented simulator command, its scenarios, and the Credit walkthrough
+- [Read-only sharing](docs/sharing.md) — share-token format, hash-at-rest, the one-time exchange, and revocation
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -285,7 +294,7 @@ behind that prefix.
 ## Scope notice
 
 The following are **deliberately absent** as of Step 19: block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
-detection, share links, the public demo, and any Hermes/OpenClaw runtime
+detection, the public demo, and any Hermes/OpenClaw runtime
 integration.
 
 Each belongs to a later step. See

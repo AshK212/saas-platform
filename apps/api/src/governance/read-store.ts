@@ -10,7 +10,7 @@ import {
   type AuditBlockRow,
   type AuditCursor,
   type AuditReceiptRow,
-  type AuthorizedWorkspace,
+  type WorkspaceScope,
   type BlockCursor,
   type DatabaseClient,
 } from '@hybrid/db';
@@ -81,23 +81,23 @@ export interface GovernanceReadStore {
    *   from a browser clock: a caller in another zone must not be shown a
    *   different day's usage than the plane enforces against.
    */
-  listFleet(authorized: AuthorizedWorkspace, now: Date): Promise<FleetAgent[]>;
+  listFleet(scope: WorkspaceScope, now: Date): Promise<FleetAgent[]>;
 
   listReceipts(
-    authorized: AuthorizedWorkspace,
+    scope: WorkspaceScope,
     options: ReceiptQueryOptions,
   ): Promise<ReceiptPage>;
 
   /** Null when the receipt is not in this workspace. */
   findReceipt(
-    authorized: AuthorizedWorkspace,
+    scope: WorkspaceScope,
     receiptId: string,
   ): Promise<AuditReceiptRow | null>;
 
-  listBlocks(authorized: AuthorizedWorkspace, options: BlockQueryOptions): Promise<BlockPage>;
+  listBlocks(scope: WorkspaceScope, options: BlockQueryOptions): Promise<BlockPage>;
 
   /** Null when the block is not in this workspace. */
-  findBlock(authorized: AuthorizedWorkspace, blockId: string): Promise<AuditBlockRow | null>;
+  findBlock(scope: WorkspaceScope, blockId: string): Promise<AuditBlockRow | null>;
 }
 
 /** Usage for an agent with no ledger row today. Computed, never written. */
@@ -112,16 +112,15 @@ export function createDrizzleGovernanceReadStore(db: DatabaseClient): Governance
    *   404 would reveal whether the id exists in some other tenant.
    */
   async function resolveAgent(
-    authorized: AuthorizedWorkspace,
+    scope: WorkspaceScope,
     externalId: string,
   ): Promise<string | null> {
-    const agent = await createAgentRepository(db, authorized.scope).findByExternalId(externalId);
+    const agent = await createAgentRepository(db, scope).findByExternalId(externalId);
     return agent?.id ?? null;
   }
 
   return {
-    async listFleet(authorized: AuthorizedWorkspace, now: Date): Promise<FleetAgent[]> {
-      const scope = authorized.scope;
+    async listFleet(scope: WorkspaceScope, now: Date): Promise<FleetAgent[]> {
       // ONE server clock reading for the whole roster, so every row reports
       // the same accounting day even if the request straddles UTC midnight.
       const day = toUtcAccountingDay(now);
@@ -161,12 +160,12 @@ export function createDrizzleGovernanceReadStore(db: DatabaseClient): Governance
     },
 
     async listReceipts(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       options: ReceiptQueryOptions,
     ): Promise<ReceiptPage> {
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
-        const resolved = await resolveAgent(authorized, options.agentExternalId);
+        const resolved = await resolveAgent(scope, options.agentExternalId);
         if (resolved === null) {
           // An id this workspace does not have yields an empty page, exactly
           // like an agent that exists but has no decisions.
@@ -177,7 +176,7 @@ export function createDrizzleGovernanceReadStore(db: DatabaseClient): Governance
 
       // One extra row is the page-boundary probe. A count would be a second
       // scan for information the client does not need.
-      const rows = await createPrecheckReceiptRepository(db, authorized.scope).listAudit({
+      const rows = await createPrecheckReceiptRepository(db, scope).listAudit({
         limit: options.limit + 1,
         agentId,
         decision: options.decision,
@@ -196,26 +195,26 @@ export function createDrizzleGovernanceReadStore(db: DatabaseClient): Governance
     },
 
     async findReceipt(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       receiptId: string,
     ): Promise<AuditReceiptRow | null> {
-      return createPrecheckReceiptRepository(db, authorized.scope).findAuditById(receiptId);
+      return createPrecheckReceiptRepository(db, scope).findAuditById(receiptId);
     },
 
     async listBlocks(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       options: BlockQueryOptions,
     ): Promise<BlockPage> {
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
-        const resolved = await resolveAgent(authorized, options.agentExternalId);
+        const resolved = await resolveAgent(scope, options.agentExternalId);
         if (resolved === null) {
           return { blocks: [], nextCursor: null };
         }
         agentId = resolved;
       }
 
-      const rows = await createBlockRepository(db, authorized.scope).listAudit({
+      const rows = await createBlockRepository(db, scope).listAudit({
         limit: options.limit + 1,
         agentId,
         source: options.source,
@@ -234,10 +233,10 @@ export function createDrizzleGovernanceReadStore(db: DatabaseClient): Governance
     },
 
     async findBlock(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       blockId: string,
     ): Promise<AuditBlockRow | null> {
-      return createBlockRepository(db, authorized.scope).findAuditById(blockId);
+      return createBlockRepository(db, scope).findAuditById(blockId);
     },
   };
 }

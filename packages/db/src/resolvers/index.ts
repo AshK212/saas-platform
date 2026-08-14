@@ -32,3 +32,5 @@ export type { MembershipRow } from './memberships.js';
 
 export { findDemoWorkspaceBySlug, findWorkspaceById } from './workspaces.js';
 export type { WorkspaceRow } from './workspaces.js';
+export { resolveShareToken } from './share-tokens.js';
+export type { ResolvedShareToken } from './share-tokens.js';

@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 20 — the Credit reference client).
+Last updated: **2026-08-14** (Step 21 — revocable read-only sharing).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -178,13 +178,21 @@ confirmed against a real client-owned Neon project:
   money defect if wrong. **A production accounting path has never executed
   against a real database.**
 
+- the **ten Step 21 live sharing tests**, currently **skipped**. Two claims
+  are about PostgreSQL itself and cannot be established any other way: that the
+  row on disk really contains a digest and NO plaintext token, and that the
+  workspace predicate really hides another tenant's agents, events, receipts
+  and blocks from a share scope. A fake cannot fail to store a column it never
+  had. **A public, unauthenticated read surface has never been exercised
+  against a real database.**
+
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Twelve criteria are now code-complete and blocked only on environment**
+**Thirteen criteria are now code-complete and blocked only on environment**
 (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12,
-AC-13) —
+AC-13, AC-18) —
 every Credit-phase enforcement criterion among them. That queue has grown at
 every step since Step 5, and each addition increases the chance that the first
 real run against Neon surfaces several problems at once rather than one at a

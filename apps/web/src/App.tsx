@@ -8,6 +8,7 @@ import {
 import { useCallback, useEffect, useState, type JSX } from 'react';
 
 import { fetchCurrentUser, logout } from './api';
+import { SharedView } from './SharedView';
 import { SignIn } from './SignIn';
 import { Workspaces } from './Workspaces';
 
@@ -69,7 +70,21 @@ function useCallbackResult(): 'success' | 'invalid_link' | null {
   return result;
 }
 
+/**
+ * Reads a share token from `/share/<token>`.
+ *
+ * Read ONCE during initialisation, before any authenticated request is made.
+ * A shared view must work in a private window with no session, so the shell
+ * must not try to sign anyone in first.
+ */
+function readShareToken(): string | null {
+  const match = /^\/share\/([^/?#]+)/.exec(window.location.pathname);
+  return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
+}
+
 export function App(): JSX.Element {
+  // Captured before anything else: the SharedView strips it from the URL.
+  const [shareToken] = useState(readShareToken);
   const [auth, setAuth] = useState<AuthState>({ status: 'loading' });
   const callbackResult = useCallbackResult();
 
@@ -99,6 +114,12 @@ export function App(): JSX.Element {
   async function onSignOut(): Promise<void> {
     await logout();
     await refresh();
+  }
+
+  // THE PUBLIC SHARED VIEW. Returned before any session is consulted, so the
+  // page renders with no login and no operator chrome whatsoever.
+  if (shareToken !== null) {
+    return <SharedView token={shareToken} />;
   }
 
   return (

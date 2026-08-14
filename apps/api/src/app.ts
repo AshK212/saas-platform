@@ -10,6 +10,9 @@ import type { EventIngestStore } from './events/store.js';
 import { createAgentPolicyRoutes } from './routes/agent-policy.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createGovernanceRoutes } from './routes/governance.js';
+import type { ShareManagementStore, ShareResolverStore } from './share/store.js';
+import { createShareManagementRoutes } from './routes/share-management.js';
+import { createSharePublicRoutes } from './routes/share-public.js';
 import type { GovernanceReadStore } from './governance/read-store.js';
 import { createEventRoutes } from './routes/events.js';
 import { createPolicyRoutes } from './routes/policy.js';
@@ -124,6 +127,10 @@ export interface AppDependencies {
    * metadata and answers the audit routes with 503.
    */
   readonly governanceReadStore?: GovernanceReadStore | undefined;
+  /** Operator-only share issuance, listing and revocation. */
+  readonly shareManagementStore?: ShareManagementStore | undefined;
+  /** Resolves a presented share token to a read-only authority. */
+  readonly shareResolverStore?: ShareResolverStore | undefined;
 
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
@@ -261,6 +268,27 @@ export function createApp(dependencies: AppDependencies): Hono {
       policyMutationStore: dependencies.policyMutationStore,
       workspaceStore: dependencies.workspaceStore,
       authService: dependencies.authService,
+    }),
+  );
+  app.route(
+    '/',
+    createShareManagementRoutes({
+      shareManagementStore: dependencies.shareManagementStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  // The PUBLIC share surface. Reuses the same read stores the operator routes
+  // use; only the authority differs.
+  app.route(
+    '/',
+    createSharePublicRoutes({
+      shareResolverStore: dependencies.shareResolverStore,
+      eventReadStore: dependencies.eventReadStore,
+      governanceReadStore: dependencies.governanceReadStore,
+      secureCookies: dependencies.secureCookies ?? false,
+      clock: dependencies.clock ?? systemClock,
     }),
   );
   app.route(

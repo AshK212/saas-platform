@@ -1,7 +1,7 @@
 import {
   createAgentRepository,
   createEventRepository,
-  type AuthorizedWorkspace,
+  type WorkspaceScope,
   type DatabaseClient,
   type EventDetailRow,
   type TimelineCursor,
@@ -18,16 +18,21 @@ import {
  * could write, and Step 10's corrected idempotency ordering cannot be disturbed
  * by anything added here.
  *
- * SCOPE, NOT A WORKSPACE ID
- * -------------------------
- * Every method takes an `AuthorizedWorkspace` - the product of a proven
- * membership - and never a workspace id. There is no method that could be
- * called without one.
+ * A SCOPE, NOT A WORKSPACE ID - AND NOT AN AUTHORITY EITHER
+ * ---------------------------------------------------------
+ * Every method takes a `WorkspaceScope`, which can only be produced by a
+ * resolver that has already proven a right to it. It never takes a workspace
+ * id, so there is no method that could be called without that proof.
  *
- * The underlying repository takes a `WorkspaceScope`, which is the seam that
- * will later let AC-18 share links and AC-19 demo read the same data through a
- * different trusted resolution. Neither is implemented, and no route here
- * accepts anything but a browser session.
+ * It deliberately does NOT take the authority itself. Three different
+ * resolutions now end in a scope - operator membership, an API credential, and
+ * an AC-18 share token - and this module is correct for all three without
+ * knowing which one it is serving. Accepting an `AuthorizedWorkspace` here
+ * would have forced the share path to manufacture a fake membership, handing a
+ * read-only viewer a synthetic role that some later route might trust.
+ *
+ * WHO may read is settled before this module is reached. WHAT they may read is
+ * settled by the scope.
  */
 
 export interface TimelineQueryOptions {
@@ -46,21 +51,20 @@ export interface TimelinePage {
 
 export interface EventReadStore {
   listTimeline(
-    authorized: AuthorizedWorkspace,
+    scope: WorkspaceScope,
     options: TimelineQueryOptions,
   ): Promise<TimelinePage>;
 
   /** One event by INTERNAL uuid. Null when it is not in this workspace. */
-  findDetail(authorized: AuthorizedWorkspace, eventId: string): Promise<EventDetailRow | null>;
+  findDetail(scope: WorkspaceScope, eventId: string): Promise<EventDetailRow | null>;
 }
 
 export function createDrizzleEventReadStore(db: DatabaseClient): EventReadStore {
   return {
     async listTimeline(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       options: TimelineQueryOptions,
     ): Promise<TimelinePage> {
-      const scope = authorized.scope;
 
       let agentId: string | undefined;
       if (options.agentExternalId !== undefined) {
@@ -104,10 +108,10 @@ export function createDrizzleEventReadStore(db: DatabaseClient): EventReadStore 
     },
 
     async findDetail(
-      authorized: AuthorizedWorkspace,
+      scope: WorkspaceScope,
       eventId: string,
     ): Promise<EventDetailRow | null> {
-      return createEventRepository(db, authorized.scope).findDetailById(eventId);
+      return createEventRepository(db, scope).findDetailById(eventId);
     },
   };
 }

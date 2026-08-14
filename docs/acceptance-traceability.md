@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-14** (Step 20 — the Credit reference client).
+Last updated: **2026-08-14** (Step 21 — revocable read-only sharing).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -52,7 +52,7 @@ only and does not redefine any criterion.
 | AC-15 | 11:00 UTC digest | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-16 | Filtered CSV parity | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
-| AC-18 | Revocable read-only share link | CREDIT | `NOT STARTED` | None. |
+| AC-18 | Revocable read-only share link | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 21 implemented the whole criterion.** An operator issues a `hmp_share_<id>_<secret>` link carrying **256 bits** of CSPRNG secret; only a SHA-256 digest and an INDEPENDENT non-secret prefix are stored, and the plaintext is returned exactly once with no recovery endpoint. The link opens in a private window with **no sign-in**, showing fleet governance state, the timeline with raw JSON drill-through, receipts and blocks — all through the SAME read stores and mappers the operator UI uses, driven by a scope derived from the share ROW. It renders **no edit controls** and authorizes **no mutation**: `ReadOnlyShareContext` carries no user, no role and no permission set. The token is POSTed once and exchanged for an HttpOnly `Path=/v1/share` cookie holding that same token, so every read re-resolves it against `revoked_at IS NULL` — revocation kills an open session on the next request, and re-pasting the original URL buys nothing. Unknown, malformed, revoked and cross-tenant all return an identical `invalid_share`. 51 route tests, 47 architecture guards. **NOT PASS:** never demonstrated in an authorized environment, and the 10 live tests proving hash-at-rest on disk and cross-tenant isolation are **SKIPPED**. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
 | AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **1555 tests, 44 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
@@ -546,17 +546,61 @@ sends malformed JSON or mishandles a 304 pass everything. The compiled CLI was
 then run against a local fake control plane, so the executable itself is
 proven, not just its modules. None of that is staging.
 
-## Summary at Step 20
+## Step 21 note: revocable read-only sharing
+
+Step 21 advanced **AC-18** from `NOT STARTED` to
+`IMPLEMENTED / STAGING VERIFICATION BLOCKED`, and advanced nothing else. AC-19
+remains `NOT STARTED`.
+
+Sharing introduces a **third read authority**. Operator membership, an API
+credential and now a share token all end in a `WorkspaceScope` and differ only
+in what else they carry — and a share carries *nothing*: no user, no role, no
+permission set. Read-only is a property of the type, not a check a future route
+might forget.
+
+Three decisions carry the weight:
+
+- **The cookie holds the token, not a derived session.** The tempting design is
+  a signed session carrying the share id. That would be a second, independent
+  credential, and a second credential can outlive the first — a viewer still
+  reading after revocation is exactly the failure the criterion exists to
+  prevent. Holding the original token means every read re-resolves it against
+  `revoked_at IS NULL`, so revocation is authoritative by construction.
+- **The token appears in one request, not every request.**
+  `/v1/share/:token/events` would be simpler and would write a live bearer
+  credential into every access log, proxy log, history entry and `Referer` for
+  the life of the session. It is POSTed once instead, in a body, and the
+  browser URL is stripped immediately after.
+- **Reuse, not copy.** The share routes call the same read stores and the same
+  row mappers the operator UI uses. Making that possible meant changing those
+  stores to take a `WorkspaceScope` rather than an `AuthorizedWorkspace` — a
+  scoped read has no business knowing how the scope was proven, and the old
+  signature would have forced the share path to fabricate a membership. A
+  parallel read model would have drifted, and a shared view describing a
+  different system than the operator sees is worse than none.
+
+**No schema change.** The Step 3 `share_tokens` table already had exactly the
+right shape — a unique prefix, a unique digest, a `revoked_at` timestamp and no
+column capable of holding a plaintext token.
+
+**A mutation probe exposed a real coverage gap and it was closed.** Probe A
+(resolve globally rather than from the token's own row) initially passed every
+behavioural test, because only one workspace held a share link in them — a
+resolver picking the wrong row would still have looked correct. A test where
+both tenants hold links, issued in the "wrong" order, now makes that probe
+fail.
+
+## Summary at Step 21
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **12** (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **13** (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13, AC-18)
 - `IMPLEMENTED PARTIAL`: **0**
 - `FOUNDATION` / `FOUNDATION ONLY`: **1** (AC-20)
 - `BLOCKED`: **1** (AC-21)
-- `NOT STARTED`: **2** (AC-18, AC-19)
+- `NOT STARTED`: **1** (AC-19)
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-12 + 0 + 1 + 1 + 2 + 5 = 21.
+13 + 0 + 1 + 1 + 1 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
 Resend and Render.
@@ -575,13 +619,16 @@ added 18 skipped live tests, Step 18 added 13, and Step 19 adds 18 more —
 including the only tests that can observe a lost update, a concurrent replay,
 or a multi-agent deadlock at all.
 
-**The Credit accounting contract is now code-complete**, and as of Step 20 a
-reference client can drive the whole flow over the public API. Every path that
+**The Credit accounting contract is now code-complete**, a reference client can
+drive the whole flow over the public API (Step 20), and a workspace can be
+shared read-only and revoked (Step 21). Every path that
 can move money exists, and each is idempotent by construction.
 
 What has never happened is any of it running against a real database or a real
-staging deployment. Twelve criteria are code-complete and blocked on exactly
+staging deployment. Thirteen criteria are code-complete and blocked on exactly
 one thing.
+
+**Only AC-19 (the public demo) remains unstarted in the Credit phase.**
 
 ## Step 3 note: relational foundation per criterion
 

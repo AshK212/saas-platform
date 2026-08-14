@@ -7,11 +7,7 @@ import {
   receiptListQuerySchema,
   receiptListResponseSchema,
   type BlockDetail,
-  type BlockSummary,
-  type DenialRule,
-  type PrecheckDenyReason,
   type ReceiptDetail,
-  type ReceiptSummary,
 } from '@hybrid/contracts';
 import type { AuditBlockRow, AuditReceiptRow, AuthorizedWorkspace } from '@hybrid/db';
 import { Hono, type Context } from 'hono';
@@ -19,6 +15,7 @@ import { Hono, type Context } from 'hono';
 import { requireAuthenticatedUser } from '../auth/middleware.js';
 import type { AuthService } from '../auth/service.js';
 import { decodeAuditCursor, encodeAuditCursor } from '../governance/cursor.js';
+import { toBlockSummary, toReceiptSummary } from '../read-models.js';
 import type { GovernanceReadStore } from '../governance/read-store.js';
 import type { WorkspaceStore } from '../workspaces/store.js';
 
@@ -74,22 +71,6 @@ export interface GovernanceRouteOptions {
   readonly authService: AuthService | undefined;
 }
 
-/** Maps a stored receipt to the operator-facing summary. */
-function toReceiptSummary(row: AuditReceiptRow): ReceiptSummary {
-  return {
-    id: row.id,
-    actionId: row.actionId,
-    agent: { id: row.agent.id, agentId: row.agent.externalId, name: row.agent.displayName },
-    category: row.category,
-    decision: row.decision,
-    // Persisted machine-readable reason; null on an allow.
-    reason: row.denyReason === null ? null : (row.denyReason as PrecheckDenyReason),
-    block: row.block === null ? null : { id: row.block.id, rule: row.block.rule as DenialRule },
-    accountingDay: row.accountingDay ?? '',
-    createdAt: row.createdAt.toISOString(),
-  };
-}
-
 /**
  * Adds the full persisted decision evidence.
  *
@@ -108,23 +89,6 @@ function toReceiptDetail(row: AuditReceiptRow): ReceiptDetail {
     ledgerPublishBefore: row.ledgerPublishBefore,
     remainingSpendUsd: row.remainingSpendUsd,
     remainingPublishCount: row.remainingPublishCount,
-  };
-}
-
-function toBlockSummary(row: AuditBlockRow): BlockSummary {
-  return {
-    id: row.id,
-    // PERSISTED ownership. The browser never infers it.
-    source: row.source,
-    agent: { id: row.agent.id, agentId: row.agent.externalId, name: row.agent.displayName },
-    category: row.category,
-    rule: row.rule,
-    reason: row.reason,
-    externalBlockId: row.externalBlockId,
-    // Null for a runtime block: a plugin reporting its own refusal has no
-    // plane receipt, and inventing one would fabricate evidence.
-    precheckId: row.precheckReceiptId,
-    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -197,7 +161,7 @@ export function createGovernanceRoutes(options: GovernanceRouteOptions): Hono {
       cursor = decoded;
     }
 
-    const page = await governanceReadStore.listReceipts(gate.authorized, {
+    const page = await governanceReadStore.listReceipts(gate.authorized.scope, {
       limit: parsed.data.limit ?? GOVERNANCE_DEFAULT_LIMIT,
       agentExternalId: parsed.data.agent_id,
       decision: parsed.data.decision,
@@ -227,7 +191,7 @@ export function createGovernanceRoutes(options: GovernanceRouteOptions): Hono {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }
 
-    const row = await governanceReadStore.findReceipt(gate.authorized, receiptId);
+    const row = await governanceReadStore.findReceipt(gate.authorized.scope, receiptId);
     if (row === null) {
       // Another tenant's receipt reads exactly like one that does not exist.
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
@@ -260,7 +224,7 @@ export function createGovernanceRoutes(options: GovernanceRouteOptions): Hono {
       cursor = decoded;
     }
 
-    const page = await governanceReadStore.listBlocks(gate.authorized, {
+    const page = await governanceReadStore.listBlocks(gate.authorized.scope, {
       limit: parsed.data.limit ?? GOVERNANCE_DEFAULT_LIMIT,
       agentExternalId: parsed.data.agent_id,
       source: parsed.data.source,
@@ -290,7 +254,7 @@ export function createGovernanceRoutes(options: GovernanceRouteOptions): Hono {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }
 
-    const row = await governanceReadStore.findBlock(gate.authorized, blockId);
+    const row = await governanceReadStore.findBlock(gate.authorized.scope, blockId);
     if (row === null) {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }

@@ -112,3 +112,12 @@ export { createWorkspaceScope, isSameWorkspace, WorkspaceScopeError } from './wo
 export type { WorkspaceScope } from './workspace-scope.js';
 
 export type { DatabaseExecutor, DatabaseTransaction } from './executor.js';
+export {
+  createShareTokenRepository,
+  shareTokenQueries,
+} from './share-tokens.js';
+export type {
+  InsertShareTokenInput,
+  ShareTokenRepository,
+  ShareTokenRow,
+} from './share-tokens.js';

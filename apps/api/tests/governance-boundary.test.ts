@@ -36,6 +36,14 @@ function code(...segments: string[]): string {
 
 const ROUTES = 'routes/governance.ts';
 const READ_STORE = 'governance/read-store.ts';
+/**
+ * Shared row -> wire mappers.
+ *
+ * Extracted in Step 21 so the AC-18 share surface presents receipts and blocks
+ * through the SAME code as the operator surface rather than a copy that could
+ * drift. Authority differs between the two; the data does not.
+ */
+const READ_MODELS = 'read-models.ts';
 
 describe('the governance routes are GET-only', () => {
   it('registers no mutating verb', () => {
@@ -322,7 +330,11 @@ describe('NO HISTORICAL RECOMPUTATION', () => {
   });
 
   it('the persisted reason is passed through, not re-derived', () => {
-    const source = code(ROUTES);
+    // The summary mappers moved to `read-models.ts` in Step 21, so the AC-18
+    // share surface presents receipts and blocks through the SAME code rather
+    // than a copy that could drift. The invariant is unchanged; only its
+    // address is, so this guard follows it.
+    const source = code(READ_MODELS);
 
     expect(source).toContain('reason: row.denyReason === null ? null :');
     // Ownership too: `source` is read from the row, never inferred from
@@ -332,15 +344,20 @@ describe('NO HISTORICAL RECOMPUTATION', () => {
   });
 
   it('fabricates no receipt for a runtime block', () => {
-    const source = code(ROUTES);
+    const source = code(READ_MODELS);
 
     // A plugin reporting its own refusal has no plane decision. Inventing one
     // would be a lie about who enforced what.
     //
-    // Every assignment must read straight from the row - not a fallback, not a
+    // EVERY assignment must read straight from the row - not a fallback, not a
     // lookup, not a synthesised id.
+    //
+    // Asserted as a property of each occurrence rather than as a count: the
+    // module legitimately carries two, one for an event's linkage and one for
+    // a block's, and a third would be fine if it obeyed the same rule.
     const assignments = [...source.matchAll(/precheckId:\s*([^,\n]+)/g)].map((m) => m[1]?.trim());
 
-    expect(assignments).toEqual(['row.precheckReceiptId']);
+    expect(assignments.length).toBeGreaterThan(0);
+    expect(new Set(assignments)).toEqual(new Set(['row.precheckReceiptId']));
   });
 });

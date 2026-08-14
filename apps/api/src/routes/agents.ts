@@ -4,9 +4,7 @@ import {
   agentResponseSchema,
   registerAgentRequestSchema,
   registerAgentResponseSchema,
-  type AgentSummary,
 } from '@hybrid/contracts';
-import type { AgentRow } from '@hybrid/db';
 import { Hono, type Context } from 'hono';
 
 import type { AgentStore } from '../agents/store.js';
@@ -16,6 +14,7 @@ import type { Clock } from '../auth/clock.js';
 import { requireAuthenticatedUser } from '../auth/middleware.js';
 import type { AuthService } from '../auth/service.js';
 import type { GovernanceReadStore } from '../governance/read-store.js';
+import { toAgentSummary } from '../read-models.js';
 import type { WorkspaceStore } from '../workspaces/store.js';
 
 /**
@@ -61,19 +60,6 @@ const NOT_FOUND_BODY = { error: 'not_found' } as const;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/** Maps a stored row to the operator-facing shape. */
-function toSummary(agent: AgentRow): AgentSummary {
-  return {
-    id: agent.id,
-    // Transport calls the client-supplied identifier `agentId`; the column is
-    // `external_id`. Same value, different name.
-    agentId: agent.externalId,
-    name: agent.displayName,
-    lastSeenAt: agent.lastSeenAt?.toISOString() ?? null,
-    createdAt: agent.createdAt.toISOString(),
-  };
-}
 
 export interface AgentRouteOptions {
   readonly agentStore: AgentStore | undefined;
@@ -201,12 +187,12 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       // SERVER time. The UTC accounting day derives from it, never from a
       // browser clock - an operator in another zone must not be shown a
       // different day's usage than the plane enforces against.
-      const fleet = await governanceReadStore.listFleet(gate.authorized, clock.now());
+      const fleet = await governanceReadStore.listFleet(gate.authorized.scope, clock.now());
 
       return c.json(
         agentListResponseSchema.parse({
           agents: fleet.map((entry) => ({
-            ...toSummary(entry.agent),
+            ...toAgentSummary(entry.agent),
             governance: entry.governance,
           })),
         }),
@@ -215,7 +201,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
 
     const agents = await agentStore.list(gate.authorized);
 
-    return c.json(agentListResponseSchema.parse({ agents: agents.map(toSummary) }));
+    return c.json(agentListResponseSchema.parse({ agents: agents.map(toAgentSummary) }));
   });
 
   /**
@@ -247,7 +233,7 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
       return c.json(NOT_FOUND_BODY, NOT_FOUND);
     }
 
-    return c.json(agentResponseSchema.parse({ agent: toSummary(agent) }));
+    return c.json(agentResponseSchema.parse({ agent: toAgentSummary(agent) }));
   });
 
   return routes;
