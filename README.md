@@ -2,7 +2,7 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 17, operator governance visibility.**
+**Current phase: Credit — Step 18, precheck-linked event settlement.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
@@ -11,8 +11,9 @@ event timeline with raw JSON drill-through, machine policy polling via
 `GET /v1/policy`, operator policy configuration with atomic versioning, the
 authoritative per-agent UTC-day ledger with exact micro-dollar arithmetic, the
 governance decision engine at `POST /v1/actions/precheck` with plane-owned
-blocks for every denial, and the operator governance surface — fleet enforcement
-state, decision receipts and block detail.
+blocks for every denial, the operator governance surface — fleet enforcement
+state, decision receipts and block detail — and precheck-linked event settlement
+with a no-double-debit guarantee.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
 exports, rollups, sharing, gone-dark alerting or demo. **Being signed in grants
@@ -37,9 +38,15 @@ on every request.
 > a bearer API key. The timeline accepts only a session cookie. A machine that
 > can submit events cannot read the tenant's history back.
 
-> **Ingest records; it does not account.** A `spend.recorded` event is stored as
-> an audit record and debits no budget. Authoritative spend accounting is a
-> later step. See [event contracts](docs/event-contracts.md).
+> **The precheck accounts; the event records.** A follow-up event carrying a
+> `precheck_id` links to the durable receipt and **never debits the ledger
+> again** — $4 prechecked and then reported stays $4, not $8. The claim is
+> verified first: same workspace, same agent, same category, same amount, and a
+> decision consistent with what the event says happened.
+>
+> **`spend.recorded` WITHOUT a `precheck_id` still does not debit the ledger.**
+> That is a known deficiency and the next Credit step. See
+> [event contracts](docs/event-contracts.md).
 
 ---
 
@@ -273,8 +280,8 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 17: event-driven spend
-debit, block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
+The following are **deliberately absent** as of Step 18: event-driven spend
+debit for unprechecked spend, block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
 detection, share links, the public demo, simulator scenarios, and any
 Hermes/OpenClaw runtime integration.
 

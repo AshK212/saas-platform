@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { IngestEvent } from '@hybrid/contracts';
 import type { AuthenticatedApiCredential } from '@hybrid/db';
 
+import { checkPrecheckLinkage, type SettlementReceipt } from '../../src/events/settlement';
 import {
   UnresolvedReferenceError,
   type EventIngestStore,
@@ -27,6 +28,11 @@ import {
  * deadlock - can only be established by
  * `packages/db/tests/event-ingest.live.test.ts`, which is skipped without
  * `TEST_DATABASE_URL`.
+ *
+ * STEP 18 SETTLEMENT IS NOT REIMPLEMENTED HERE. This fake calls the SAME
+ * `checkPrecheckLinkage` the production store calls. A transcribed copy could
+ * drift and quietly start accepting a claim production rejects, which would
+ * make every route test below prove the wrong thing.
  */
 
 export interface StoredEvent {
@@ -50,6 +56,20 @@ export interface StoredAgent {
   lastSeenAt: Date | null;
 }
 
+/** A receipt as the precheck engine stored it. Immutable once seeded. */
+export interface StoredReceipt extends SettlementReceipt {
+  workspaceId: string;
+}
+
+/** What a seeded decision recorded. Defaults describe an allowed $4 spend. */
+export interface SeedReceiptFacts {
+  agentExternalId?: string;
+  category?: SettlementReceipt['category'];
+  decision?: 'allow' | 'deny';
+  requestedAmountUsd?: string | null;
+  requestedPublishCount?: number | null;
+}
+
 export interface StoredBlock {
   id: string;
   workspaceId: string;
@@ -68,8 +88,15 @@ export interface MemoryEventStore extends EventIngestStore {
   readonly agents: StoredAgent[];
   readonly blocks: StoredBlock[];
   /** Pre-existing receipts, so precheck linkage can be exercised. */
-  readonly receipts: { id: string; workspaceId: string }[];
-  seedReceipt(workspaceId: string): string;
+  readonly receipts: StoredReceipt[];
+  /**
+   * Records a decision as the precheck engine would have.
+   *
+   * `agentExternalId` is resolved to an internal uuid the same way ingest
+   * resolves it, so the agent-consistency rule is exercised against a real
+   * id-shape mismatch rather than a convenient equality.
+   */
+  seedReceipt(workspaceId: string, facts?: SeedReceiptFacts): string;
   /** Forces the persistence layer to fail, to exercise rollback. */
   failOnEventId: string | null;
 }
@@ -78,8 +105,18 @@ export function createMemoryEventStore(): MemoryEventStore {
   const events: StoredEvent[] = [];
   const agents: StoredAgent[] = [];
   const blocks: StoredBlock[] = [];
-  const receipts: { id: string; workspaceId: string }[] = [];
+  const receipts: StoredReceipt[] = [];
   const state = { failOnEventId: null as string | null };
+
+  /** Agent discovery, shared so seeding and ingest agree on internal ids. */
+  const resolveAgent = (workspaceId: string, externalId: string): StoredAgent => {
+    let agent = agents.find((a) => a.workspaceId === workspaceId && a.externalId === externalId);
+    if (agent === undefined) {
+      agent = { id: randomUUID(), workspaceId, externalId, lastSeenAt: null };
+      agents.push(agent);
+    }
+    return agent;
+  };
 
   return {
     events,
@@ -87,9 +124,19 @@ export function createMemoryEventStore(): MemoryEventStore {
     blocks,
     receipts,
 
-    seedReceipt(workspaceId: string): string {
+    seedReceipt(workspaceId: string, facts: SeedReceiptFacts = {}): string {
       const id = randomUUID();
-      receipts.push({ id, workspaceId });
+      const agent = resolveAgent(workspaceId, facts.agentExternalId ?? 'agent-a');
+      receipts.push({
+        id,
+        workspaceId,
+        agentId: agent.id,
+        category: facts.category ?? 'spend',
+        decision: facts.decision ?? 'allow',
+        requestedAmountUsd:
+          facts.requestedAmountUsd === undefined ? '4.000000' : facts.requestedAmountUsd,
+        requestedPublishCount: facts.requestedPublishCount ?? null,
+      });
       return id;
     },
 
@@ -142,17 +189,13 @@ export function createMemoryEventStore(): MemoryEventStore {
           }
 
           // 2. Agent discovery - never advances last_seen.
-          let agent = agents.find(
-            (a) => a.workspaceId === workspaceId && a.externalId === event.agent_id,
-          );
-          if (agent === undefined) {
-            agent = { id: randomUUID(), workspaceId, externalId: event.agent_id, lastSeenAt: null };
-            agents.push(agent);
-          }
+          const agent = resolveAgent(workspaceId, event.agent_id);
 
-          // 3. Precheck linkage, scoped to this workspace.
+          // 3. Precheck linkage - resolve scoped, then VALIDATE the claim.
           let precheckReceiptId: string | null = null;
           if (event.precheck_id !== undefined) {
+            // Workspace-scoped: another tenant's receipt is simply not found,
+            // exactly as the SQL predicate makes it in production.
             const found = receipts.find(
               (r) => r.id === event.precheck_id && r.workspaceId === workspaceId,
             );
@@ -162,6 +205,13 @@ export function createMemoryEventStore(): MemoryEventStore {
                 field: 'precheck_id',
                 message: 'Unknown precheck_id for this workspace.',
               });
+              continue;
+            }
+
+            // THE SHARED RULE. Not a transcription.
+            const linkage = checkPrecheckLinkage(event, found, agent.id);
+            if (!linkage.ok) {
+              unresolved.push({ index, field: 'precheck_id', message: linkage.message });
               continue;
             }
             precheckReceiptId = found.id;

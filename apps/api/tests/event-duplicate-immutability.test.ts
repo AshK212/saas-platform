@@ -202,13 +202,17 @@ describe('the precheck variant', () => {
   it('creates no receipt and rewrites no linkage', async () => {
     const t = await tenant();
     const receiptId = eventStore.seedReceipt(t.workspaceId);
-    await ingest(t.key, [
-      { event_id: 'evt-p2', agent_id: 'agent-a', type: 'heartbeat', precheck_id: receiptId },
-    ]);
+    const settled = {
+      event_id: 'evt-p2',
+      agent_id: 'agent-a',
+      type: 'spend.recorded',
+      amount_usd: '4.000000',
+      provider: 'openai',
+      precheck_id: receiptId,
+    } as const;
 
-    await ingest(t.key, [
-      { event_id: 'evt-p2', agent_id: 'agent-a', type: 'heartbeat', precheck_id: UNKNOWN_RECEIPT },
-    ]);
+    await ingest(t.key, [settled]);
+    await ingest(t.key, [{ ...settled, precheck_id: UNKNOWN_RECEIPT }]);
 
     expect(eventStore.receipts).toHaveLength(1);
     expect(eventStore.events[0]?.precheckReceiptId).toBe(receiptId);
@@ -339,12 +343,23 @@ describe('the ordering is pinned in the source', () => {
 
   it.each([
     ['agent discovery', 'agentRepo.discover('],
-    ['receipt lookup', 'receiptRepo.exists('],
+    ['receipt lookup', 'receiptRepo.findById('],
+    // Step 18 settlement validation is side-effect-free, but it can REJECT.
+    // Running it before the duplicate decision would make a replay carrying a
+    // fake precheck_id fail the batch instead of reporting a duplicate, which
+    // is the changed-replay defect in a new disguise.
+    ['settlement validation', 'checkPrecheckLinkage('],
     ['block creation', 'blockRepo.resolveOrCreateRuntimeBlock('],
     ['the insert', 'eventRepo.insertIfNew('],
     ['last-seen advancement', 'agentRepo.touchLastSeen('],
   ])('the duplicate check precedes %s', (_label, needle) => {
     expect(positionOf('eventRepo.findByEventId(')).toBeLessThan(positionOf(needle));
+  });
+
+  it('resolves the agent before validating linkage against it', () => {
+    // The receipt stores an internal agent UUID; the wire carries an external
+    // id. Comparing them requires the resolution to have happened first.
+    expect(positionOf('agentRepo.discover(')).toBeLessThan(positionOf('checkPrecheckLinkage('));
   });
 
   it('retains ON CONFLICT as database defense in depth', () => {

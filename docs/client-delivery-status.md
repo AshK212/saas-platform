@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 17 — operator governance visibility).
+Last updated: **2026-08-14** (Step 18 — precheck-linked event settlement).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -155,6 +155,18 @@ confirmed against a real client-owned Neon project:
   no ledger row**. That last one cannot be tested any other way: an in-memory
   store cannot fail to write a row it was never asked to write. A mutation probe
   during Step 17 confirmed the gap was real, which is why this suite exists.
+
+- the **thirteen Step 18 live settlement tests**, currently **skipped**. These
+  are the only tests in the repository where the precheck debit and the event
+  path touch ONE real `ledger_daily` table, and therefore the only place the
+  headline accounting invariant can actually fail: precheck $4, report it, and
+  the ledger must still read $4 rather than $8. In process the two are separate
+  fakes and the event store has no ledger at all, so the property is nearly
+  true by construction there. Also unproven without them: that the workspace
+  predicate genuinely hides another tenant's receipt from event ingest, and
+  that two concurrent replays of one linked event produce exactly one row and
+  zero accounting. **A release-critical money invariant has never been observed
+  against a real database.**
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified

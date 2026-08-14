@@ -10,6 +10,8 @@ import {
   type EventRow,
 } from '@hybrid/db';
 
+import { checkPrecheckLinkage } from './settlement.js';
+
 /**
  * Event ingest persistence.
  *
@@ -30,7 +32,7 @@ import {
  *       1. SELECT the event by (workspace_id, event_id)
  *          if present -> duplicates++, CONTINUE. No further work at all.
  *       2. discover/resolve the agent      - WITHOUT touching last_seen
- *       3. resolve precheck_id if present  - unresolved => abort whole batch
+ *       3. resolve + VALIDATE precheck_id  - incoherent => abort whole batch
  *       4. resolve/create runtime block    - idempotent on external id
  *       5. INSERT event ON CONFLICT DO NOTHING RETURNING
  *       6. accepted++, advance agent last_seen
@@ -63,18 +65,38 @@ import {
  * a fresh `agent_id` enrolled an agent the same way. An unknown `precheck_id`
  * on a replay could even fail a batch that was going to change nothing.
  *
+ * ─── PRECHECK-LINKED SETTLEMENT (Step 18) ─────────────────────────────────
+ *
+ *   PRECHECK COMMITS THE AUTHORITATIVE USAGE.
+ *   THE FOLLOW-UP EVENT RECORDS WHAT HAPPENED.
+ *   THE EVENT NEVER COMMITS THAT USAGE AGAIN.
+ *
+ * An event carrying `precheck_id` claims the action was already authorized and
+ * already accounted for. The plane acts on that claim by NOT debiting - so the
+ * claim is verified before it is believed. See `settlement.ts` for the rules
+ * and the reasoning behind each one.
+ *
+ * The verification adds NO WRITE. Nothing marks a receipt consumed, and no
+ * mutable settlement state exists: the linkage lives on `events.precheck_id`,
+ * which the insert already carried. Receipts stay immutable evidence.
+ *
  * ─── WHAT THIS DELIBERATELY DOES NOT DO ───────────────────────────────────
  *
- * NO LEDGER DEBIT. A `spend.recorded` event is persisted as an audit record and
- * nothing else. Authoritative spend accounting is Step 19. Event persistence is
- * not authoritative spend accounting by itself.
+ * NO LEDGER DEBIT, ON EITHER PATH.
  *
- * When that arrives, it hangs off the SAME "this event is new" branch below,
- * which is what makes exactly-once accounting reachable: a duplicate never gets
- * far enough to debit anything.
+ *   PRECHECKED spend   -> the precheck already debited. Debiting here would
+ *                         double-count, and this is the whole point of Step 18.
+ *   UNPRECHECKED spend -> still does NOT debit. That deficiency remains
+ *                         intentionally open for the NEXT Credit step.
  *
- * No precheck receipts are created, no caps enforced, no plane-owned blocks
- * written, and no policy read or mutated - this module imports no policy table.
+ * When event-side accounting does arrive, it hangs off the SAME "this event is
+ * new" branch below, which is what makes exactly-once accounting reachable: a
+ * duplicate never gets far enough to debit anything. It must also remain gated
+ * on the ABSENCE of a valid `precheck_id`.
+ *
+ * No precheck receipts are created or modified, no caps enforced, no
+ * plane-owned blocks written, and no policy read or mutated - this module
+ * imports no policy table and no ledger repository.
  */
 
 /** Outcome of ingesting one batch. */
@@ -169,15 +191,26 @@ export function createDrizzleEventIngestStore(db: DatabaseClient): EventIngestSt
           // 2. Agent - discovered on first sight, no activity claimed yet.
           const agent = await agentRepo.discover(event.agent_id, now);
 
-          // 3. Precheck linkage. A reference that does not resolve in THIS
-          //    workspace fails the batch rather than being quietly dropped -
-          //    silently storing the event without the linkage the caller asked
-          //    for would be a silent drop of meaning.
+          // 3. Precheck linkage - SETTLEMENT (Step 18).
+          //
+          //    A reference that does not resolve in THIS workspace fails the
+          //    batch rather than being quietly dropped: silently storing the
+          //    event without the linkage the caller asked for would be a silent
+          //    drop of meaning.
+          //
+          //    The lookup is workspace-scoped IN SQL, so another tenant's
+          //    receipt is never returned and reads identically to one that does
+          //    not exist. No JavaScript compares workspace ids afterwards.
+          //
+          //    Resolving is not enough. `precheck_id` says "this action was
+          //    already authorized and already accounted for", and the plane
+          //    acts on that by NOT debiting again. An unchecked claim would
+          //    therefore be a way to make spend vanish - so the claim must be
+          //    coherent with what the receipt actually records.
           let precheckReceiptId: string | undefined;
           if (event.precheck_id !== undefined) {
-            if (await receiptRepo.exists(event.precheck_id)) {
-              precheckReceiptId = event.precheck_id;
-            } else {
+            const receipt = await receiptRepo.findById(event.precheck_id);
+            if (receipt === null) {
               // A receipt in another workspace is reported identically to one
               // that does not exist.
               unresolved.push({
@@ -187,6 +220,13 @@ export function createDrizzleEventIngestStore(db: DatabaseClient): EventIngestSt
               });
               continue;
             }
+
+            const linkage = checkPrecheckLinkage(event, receipt, agent.id);
+            if (!linkage.ok) {
+              unresolved.push({ index, field: 'precheck_id', message: linkage.message });
+              continue;
+            }
+            precheckReceiptId = receipt.id;
           }
 
           // 4. Runtime block. The wire `block_id` is the client's opaque

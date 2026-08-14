@@ -5,9 +5,14 @@
 > A plane denial writes a durable receipt **and** a plane-owned block, in one
 > transaction. An allow writes a receipt and no block. Complete as of Step 16.
 
-> **`spend.recorded` events still do NOT debit the authoritative ledger.** That
-> is Step 19, and it is a different path from this one. A precheck *allow* does
-> debit, immediately and in the same transaction as its receipt.
+> **A precheck *allow* debits immediately**, in the same transaction as its
+> receipt. A follow-up event carrying that `precheck_id` **never debits again** —
+> see [event contracts](event-contracts.md#precheck-linked-settlement-step-18).
+> Step 18 made that guarantee explicit and enforced the receipt claim behind it.
+>
+> **`spend.recorded` WITHOUT a `precheck_id` still does NOT debit the
+> authoritative ledger.** That remains a known deficiency and is the NEXT Credit
+> step.
 
 > **Receipt and block presentation landed in Step 17.** See
 > [governance-visibility.md](governance-visibility.md). Those surfaces are

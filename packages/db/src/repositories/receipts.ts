@@ -169,6 +169,30 @@ export const receiptQueries = {
       .limit(1),
 
   /**
+   * THE EVENT-SETTLEMENT LOOKUP (Step 18).
+   *
+   * Resolves a caller-supplied `precheck_id` to the receipt it claims to follow
+   * up on, so ingest can check that the claim is coherent - same agent, same
+   * category, same amount, and a decision that matches what the event says
+   * happened.
+   *
+   * WORKSPACE-SCOPED IN SQL, not compared afterwards in JavaScript. A receipt
+   * belonging to another tenant must be indistinguishable from one that does
+   * not exist, and the only way to guarantee that is for the row never to be
+   * returned in the first place.
+   *
+   * Deliberately the LEAN projection rather than `findAuditById`: settlement
+   * needs the decision facts, not the agent and block joins the operator audit
+   * renders.
+   */
+  findById: (executor: DatabaseExecutor, scope: WorkspaceScope, receiptId: string) =>
+    executor
+      .select(RECEIPT_COLUMNS)
+      .from(precheckReceipts)
+      .where(and(receiptScopePredicate(scope), eq(precheckReceipts.id, receiptId)))
+      .limit(1),
+
+  /**
    * One page of the workspace audit stream, newest first.
    *
    * ORDERING. `created_at DESC, id DESC`. The timestamp is server-assigned;
@@ -255,6 +279,15 @@ export interface PrecheckReceiptRepository {
    * not exist - the caller must not be able to probe another tenant's ids.
    */
   exists(receiptId: string): Promise<boolean>;
+
+  /**
+   * The receipt a follow-up event claims to settle, if it is in THIS workspace.
+   *
+   * @returns null for a receipt in another workspace, exactly as for one that
+   *   does not exist. Ingest reports both identically, so a caller cannot probe
+   *   another tenant's receipt ids.
+   */
+  findById(receiptId: string): Promise<ReceiptRow | null>;
 
   /**
    * The receipt already recorded for this action, if any.
@@ -372,6 +405,12 @@ export function createPrecheckReceiptRepository(
     async exists(receiptId: string): Promise<boolean> {
       const rows = await receiptQueries.exists(executor, scope, receiptId);
       return rows.length > 0;
+    },
+
+    async findById(receiptId: string): Promise<ReceiptRow | null> {
+      const rows = await receiptQueries.findById(executor, scope, receiptId);
+      const row = rows[0];
+      return row === undefined ? null : toReceiptRow(row);
     },
 
     async findByActionId(actionId: string): Promise<ReceiptRow | null> {

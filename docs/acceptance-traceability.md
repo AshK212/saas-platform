@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-14** (Step 17 — operator governance visibility).
+Last updated: **2026-08-14** (Step 18 — precheck-linked event settlement).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -400,7 +400,60 @@ both were partial only because their acceptance is observed through an operator
 UI, and that UI now exists. Neither is PASS: nothing has run against a real
 database.
 
-## Summary at Step 17
+## Step 18 note: precheck-linked settlement and no double debit
+
+Step 18 changed **no acceptance criterion's status**. It closed an accounting
+hole that would have made several of them wrong in production.
+
+The invariant:
+
+> **PRECHECK COMMITS THE AUTHORITATIVE USAGE.
+> THE FOLLOW-UP EVENT RECORDS WHAT HAPPENED.
+> THE EVENT NEVER COMMITS THAT USAGE AGAIN.**
+
+A $4 precheck allow debits $4. The runtime then reports `spend.recorded` for
+the work it just did, citing the receipt. The ledger must still read **$4, not
+$8** — otherwise AC-07's "$25 cap" is reached at $12.50 of real spend, and
+AC-08's $41 denial fires against a total nobody can explain.
+
+Two decisions carry the weight:
+
+- **"Linked events do not debit" is only safe if the link is TRUE.** Without
+  verification, `precheck_id` becomes a way to make spend vanish: point any
+  `spend.recorded` at any receipt and the plane records the money while
+  charging nothing. Six checks close that — workspace, agent, event type,
+  decision, category, amount — each a hard rejection that rolls the batch back.
+  The amount comparison is exact micro-dollar `bigint`, so `"4"` equals
+  `"4.000000"` and `4.000001` does not.
+- **Nothing is written to the receipt.** No consumption flag, no settled-at
+  column. Receipts stay immutable historical evidence and the linkage lives on
+  `events.precheck_receipt_id`, which the Step 10 insert already carried. That
+  also means there is no new mutable state to get concurrency wrong.
+
+**The Step 10 ordering correction paid off again.** Settlement validation is
+side-effect-free but it can *reject*, so it had to go strictly after the
+duplicate decision — otherwise a replay carrying a stale `precheck_id` would
+become a 400 instead of a duplicate. That is the changed-replay defect in a new
+disguise, and a mutation probe confirmed the guards catch it eleven ways.
+
+**One deliberate contract tightening.** A `heartbeat` carrying `precheck_id` is
+now rejected. Step 9 placed the field on every variant for uniformity, but a
+liveness ping is not the completion of a governed action and the linkage would
+be meaningless. Two existing tests used `heartbeat` as a convenient minimal
+carrier and were changed to a real follow-up event.
+
+**No schema change and no migration.** `events.precheck_receipt_id` already
+existed from Step 3, and `spend.recorded` already carried `amount_usd` as a
+typed envelope field — so the amount could be compared without trusting
+free-form `payload` JSON. The only addition is a read: a lean, workspace-scoped
+`receiptQueries.findById`.
+
+**Carried forward unchanged:** `spend.recorded` **without** a `precheck_id`
+still does not debit the authoritative ledger. That is the next Credit step, and
+Step 18 deliberately did not move it in either direction so the linked path
+could be reviewed on its own.
+
+## Summary at Step 18
 
 - `PASS`: **0**
 - `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **11** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
@@ -423,9 +476,11 @@ no longer a criterion in this group waiting on further implementation.
 **The environment risk is now the entire remaining risk, and it has not narrowed
 at any point.** Eleven criteria are code-complete and **none** has ever run
 against a real database. Every concurrency, atomicity, isolation and
-accounting-day guarantee in Steps 10–17 is argued and tested-but-unrun. The
-number of unverified criteria has grown at every step since Step 5; nothing in
-Step 17 changes that, and Step 17 adds 18 more skipped live tests to the queue.
+accounting-day guarantee in Steps 10–18 is argued and tested-but-unrun. The
+number of unverified criteria has grown at every step since Step 5; Step 17
+added 18 skipped live tests and Step 18 adds 13 more — including the only test
+that can actually observe the no-double-debit invariant against one real
+`ledger_daily` table.
 
 ## Step 3 note: relational foundation per criterion
 

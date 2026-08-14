@@ -472,7 +472,16 @@ describe('precheck linkage', () => {
     const receiptId = eventStore.seedReceipt(t.workspaceId);
 
     const response = await ingest(t.key, {
-      events: [{ type: 'heartbeat', event_id: 'e1', agent_id: 'agent-a', precheck_id: receiptId }],
+      events: [
+        {
+          type: 'spend.recorded',
+          event_id: 'e1',
+          agent_id: 'agent-a',
+          amount_usd: '4.000000',
+          provider: 'openai',
+          precheck_id: receiptId,
+        },
+      ],
     });
 
     expect(response.status).toBe(200);

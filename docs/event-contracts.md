@@ -1,21 +1,30 @@
 # Event Contracts
 
 > **Contract defined in Step 9. Ingest implemented in Step 10 — `POST /v1/events`
-> is now mounted.**
+> is now mounted. Precheck-linked settlement added in Step 18.**
 >
-> ## ⚠ INGEST DOES NOT DEBIT THE LEDGER
+> ## ⚠ INGEST DOES NOT DEBIT THE LEDGER — ON EITHER PATH
 >
-> A `spend.recorded` event is stored as an **audit record and nothing else**. It
-> does not decrement a budget, does not update `ledger_daily`, does not enforce a
-> cap, and does not affect any precheck decision. **Persisting spend events is
-> not spend accounting.** Authoritative debit is **Step 19**.
+> **PRECHECKED action** (`precheck_id` present): the precheck already committed
+> the usage and wrote a durable receipt. The event is **audit evidence** that
+> the authorized action ran. Debiting here would double-count — a $4 allow
+> followed by its own `spend.recorded` would leave **$8** committed for $4 of
+> work. This is the Step 18 no-double-debit guarantee, and it is deliberate and
+> permanent.
 >
-> Until then, do not read "events were accepted" as "spend was counted". A live
-> test asserts that ingesting a `spend.recorded` event writes no ledger row.
+> **UNPRECHECKED spend** (`spend.recorded` with no `precheck_id`): stored as an
+> audit record and nothing else. It does not decrement a budget, does not update
+> `ledger_daily`, and does not enforce a cap. **This remains a known deficiency
+> and is the NEXT Credit step.**
+>
+> Do not read "events were accepted" as "spend was counted" in either case. Live
+> tests assert both: that a linked event leaves the ledger at exactly what the
+> precheck committed, and that an unlinked one writes no ledger row at all.
 
 Source: [`packages/contracts/src/events.ts`](../packages/contracts/src/events.ts) ·
 route [`apps/api/src/routes/events.ts`](../apps/api/src/routes/events.ts) ·
-ingest [`apps/api/src/events/store.ts`](../apps/api/src/events/store.ts).
+ingest [`apps/api/src/events/store.ts`](../apps/api/src/events/store.ts) ·
+settlement rules [`apps/api/src/events/settlement.ts`](../apps/api/src/events/settlement.ts).
 
 ---
 
@@ -83,7 +92,7 @@ is AC-13 and returns 200.
 | `agent_id` | yes | Stable external identifier (`agents.external_id`), ≤120 chars. Never the internal UUID. |
 | `type` | yes | Discriminant; see vocabulary below. |
 | `occurred_at` | no | Client-reported ISO-8601 with offset. **Untrusted.** |
-| `precheck_id` | no | UUID of a precheck receipt. Structural validation only. |
+| `precheck_id` | no | UUID of a precheck receipt. Validated against the receipt at ingest — see [Precheck-linked settlement](#precheck-linked-settlement-step-18). Forbidden on `heartbeat`. |
 | `payload` | no | Free-form runtime metadata object. |
 
 > `occurred_at` = client metadata · `received_at` = server authority
@@ -297,7 +306,7 @@ BEGIN
     1. SELECT the event by (workspace_id, event_id)
        if present -> duplicates++, CONTINUE — no further work at all
     2. discover/resolve the agent      — WITHOUT touching last_seen
-    3. resolve precheck_id if present  — unresolved => abort the whole batch
+    3. resolve + VALIDATE precheck_id  — incoherent => abort the whole batch
     4. resolve/create runtime block    — idempotent on external id
     5. INSERT ON CONFLICT (workspace_id, event_id) DO NOTHING RETURNING
     6. accepted++, advance agent last_seen
@@ -372,10 +381,17 @@ to create rows. It is not. A replay reusing a stored id with a changed
 - moves no `last_seen_at`;
 - leaves every stored row byte-identical.
 
-An unknown `precheck_id` on a *replay* does **not** produce a 400, because the
-identity is settled before any linkage is considered — a batch that changes
-nothing cannot fail on a reference it never needed. On a **new** event an
-unknown `precheck_id` is still a 400.
+An unknown, forged, *or incoherent* `precheck_id` on a **replay** does **not**
+produce a 400, because the identity is settled before any linkage is considered
+— a batch that changes nothing cannot fail on a reference it never needed. That
+extends to every Step 18 rule: a replay claiming a different agent, a different
+category or an inflated amount is still just a duplicate, and the stored
+linkage is never rewritten. On a **new** event, each of those is a 400.
+
+This ordering is load-bearing in both directions. Settlement validation is
+side-effect-free but it can *reject*, so running it before the duplicate
+decision would turn a harmless replay into a hard failure — the changed-replay
+defect corrected in Step 10, in a new disguise. A source guard pins the order.
 
 This is not a validation bypass. Step 9 validation runs first and is unchanged:
 a structurally invalid event is a 400 even when its `event_id` matches a stored
@@ -412,13 +428,65 @@ An `action.blocked` event with no `block_id` has no stable dedup key, so no
 block row is created; the event still persists with its `rule` and `reason` in
 the raw payload.
 
-### An unresolved `precheck_id` fails the batch
+### Precheck-linked settlement (Step 18)
 
-If `precheck_id` names no receipt **in this workspace**, the request returns 400
-with `path: "events.<i>.precheck_id"` and the whole transaction rolls back. The
-alternative — storing the event with the linkage silently removed — would be a
-silent drop of meaning. A receipt belonging to another workspace is reported
-byte-identically to one that does not exist; a UUID is not authorization.
+> **PRECHECK COMMITS THE AUTHORITATIVE USAGE.
+> THE FOLLOW-UP EVENT RECORDS WHAT HAPPENED.
+> THE EVENT NEVER COMMITS THAT USAGE AGAIN.**
+
+An event carrying `precheck_id` claims the action was already authorized *and
+already accounted for*. The plane acts on that claim by **not debiting** — so
+the claim is verified before it is believed.
+
+Without verification, `precheck_id` would be a way to make spend disappear:
+point any `spend.recorded` at any receipt and the plane records the money while
+charging nothing for it. These are the five checks that close it, applied in
+this order:
+
+| # | Check | Rejected because |
+| --- | --- | --- |
+| 1 | **Resolves in this workspace** | A UUID is not authorization. Enforced by the SQL predicate, so another tenant's row is never returned — never compared in JavaScript. |
+| 2 | **Same agent** | Otherwise one prechecked $4 absolves spend across the whole fleet. Compares the receipt's *internal* agent uuid to the resolved agent, never the wire `agent_id`. |
+| 3 | **Not a heartbeat** | A liveness ping is not the completion of a governed action, so there is nothing to follow up on. |
+| 4 | **Decision is coherent** | A denial is not permission. `spend.recorded` and `agent.action` assert success and may only cite an `allow`. |
+| 5 | **Same category** | A `publish` receipt is not spend evidence, and `llm_call` / `tool_call` / `other` do not become spend authorization by being referenced. |
+| 6 | **Same amount** | The inflation guard: $4 authorized must not absolve $400. |
+
+Any failure returns 400 with `path: "events.<i>.precheck_id"` and rolls the
+**whole batch** back. Storing the event with the linkage silently removed would
+be a silent drop of meaning; storing it *with* an unverified linkage would be
+worse.
+
+**Amount comparison is exact micro-dollar `bigint`.** `"4"`, `"4.0"` and
+`"4.000000"` are all valid wire forms of the same money and compare equal;
+`4.000001` does not. There is no `parseFloat` anywhere on this path — a
+comparison deciding whether $400 passes as $4 is the last place a double
+belongs. The amount is read from the **typed envelope field** only, never from
+`payload`, which is inert by construction.
+
+**`precheck_id` is not event identity.** `event_id` is. Several legitimate audit
+events may reference one authorized action — an `agent.action` and a
+`spend.recorded` for the same work, say — and none of them debits.
+
+**Nothing is written to the receipt.** There is no consumption flag and no
+settled-at column: receipts are immutable historical evidence, and the linkage
+lives on `events.precheck_receipt_id`, which the insert already carried.
+
+#### `action.blocked` may cite either decision
+
+A runtime block referencing a **denied** receipt is a runtime echoing the plane's
+refusal. One referencing an **allowed** receipt is equally real: the plane
+allowed it and the runtime refused for its own reason. Forcing a choice there
+would make a runtime hide either its block or which decision preceded it.
+
+#### Watch mode
+
+A `watch` precheck **allows and records nothing** — the ledger does not move.
+A later `spend.recorded` linked to that receipt is accepted and **still records
+nothing**. A follow-up event is not a second chance to make an accounting
+decision; the receipt captured the authoritative semantics, and an operator who
+has not opted into enforcement has not opted into having usage counted against
+them by the back door either.
 
 Ingest can only *verify* a receipt, never create one. A self-issued receipt
 would be an approval an agent granted itself.
@@ -606,15 +674,20 @@ are hard-capped partly so a single call cannot become an export.
 
 ---
 
-## Not implemented in Step 11
+## Not implemented as of Step 18
 
-- **Ledger debit / spend accounting** — Step 19. See the warning at the top.
-  When it arrives it hangs off the **same "this event is new" branch** as
-  `last_seen`, which is what makes exactly-once accounting reachable: a
-  duplicate returns before that branch, so it can never produce a second debit,
-  a second receipt effect, a second block, or a false liveness update. The
-  ordering correction above is a prerequisite for Steps 18–19, not a cosmetic
-  cleanup.
+- **Ledger debit for UNPRECHECKED spend** — the NEXT Credit step. See the
+  warning at the top. When it arrives it hangs off the **same "this event is
+  new" branch** as `last_seen`, which is what makes exactly-once accounting
+  reachable: a duplicate returns before that branch, so it can never produce a
+  second debit, a second receipt effect, a second block, or a false liveness
+  update. It must also stay gated on the **absence** of a valid `precheck_id`,
+  or it would reintroduce exactly the double debit Step 18 closed. The Step 10
+  ordering correction is a prerequisite for both, not a cosmetic cleanup.
+- **Any debit for PRECHECKED spend** — permanently absent by design, not
+  deferred. The precheck committed it.
+- **Receipt consumption state** — no consumption flag, no settled-at column, no
+  "this receipt has been used" concept. Receipts are immutable.
 - **Cap enforcement and precheck decisions** — the precheck steps. Ingest reads
   no policy table and cannot mutate policy.
 - **Plane-owned blocks** — only `source = 'runtime'` is writable here.
