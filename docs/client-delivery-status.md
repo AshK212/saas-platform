@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 18 — precheck-linked event settlement).
+Last updated: **2026-08-14** (Step 19 — authoritative event accounting).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -166,6 +166,16 @@ confirmed against a real client-owned Neon project:
   predicate genuinely hides another tenant's receipt from event ingest, and
   that two concurrent replays of one linked event produce exactly one row and
   zero accounting. **A release-critical money invariant has never been observed
+  against a real database.**
+
+- the **eighteen Step 19 live accounting tests**, currently **skipped**. Event
+  ingest now moves money, and these are the only tests that can observe the
+  three ways that can go wrong under concurrency: a LOST UPDATE (two debits
+  reading the same total, which `SELECT … FOR UPDATE` exists to prevent), a
+  concurrent replay of one event debiting twice, and two batches naming the
+  same agents in opposite order DEADLOCKING on ledger rows. Single-threaded
+  JavaScript makes all three true for free; PostgreSQL does not, and each is a
+  money defect if wrong. **A production accounting path has never executed
   against a real database.**
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be

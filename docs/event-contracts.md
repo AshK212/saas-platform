@@ -3,23 +3,28 @@
 > **Contract defined in Step 9. Ingest implemented in Step 10 — `POST /v1/events`
 > is now mounted. Precheck-linked settlement added in Step 18.**
 >
-> ## ⚠ INGEST DOES NOT DEBIT THE LEDGER — ON EITHER PATH
+> ## ⚠ WHICH EVENTS MOVE MONEY
 >
-> **PRECHECKED action** (`precheck_id` present): the precheck already committed
-> the usage and wrote a durable receipt. The event is **audit evidence** that
-> the authorized action ran. Debiting here would double-count — a $4 allow
-> followed by its own `spend.recorded` would leave **$8** committed for $4 of
-> work. This is the Step 18 no-double-debit guarantee, and it is deliberate and
-> permanent.
+> A `spend.recorded` event debits the authoritative UTC-day ledger **if and only
+> if it carries no `precheck_id`**.
 >
-> **UNPRECHECKED spend** (`spend.recorded` with no `precheck_id`): stored as an
-> audit record and nothing else. It does not decrement a budget, does not update
-> `ledger_daily`, and does not enforce a cap. **This remains a known deficiency
-> and is the NEXT Credit step.**
+> **UNPRECHECKED spend** (Step 19): the spend already happened and is being
+> reported. The event **IS** the accounting record and debits **exactly once**.
+> Event identity is what makes that idempotent — a replay never reaches
+> accounting.
 >
-> Do not read "events were accepted" as "spend was counted" in either case. Live
-> tests assert both: that a linked event leaves the ledger at exactly what the
-> precheck committed, and that an unlinked one writes no ledger row at all.
+> **PRECHECKED spend** (Step 18): the precheck already committed the usage and
+> wrote a durable receipt. The event is **audit evidence** and debits
+> **nothing**. Debiting here would double-count — a $4 allow followed by its own
+> `spend.recorded` would leave **$8** committed for $4 of work.
+>
+> The classification is the **presence** of a validated receipt, never what that
+> receipt recorded. A `watch` precheck deliberately committed nothing, and its
+> follow-up event must not commit on its behalf.
+>
+> **No other event type moves money.** A `heartbeat` cannot, an `agent.action`
+> carries no amount, and an `action.blocked` spend is money that was *not*
+> spent.
 
 Source: [`packages/contracts/src/events.ts`](../packages/contracts/src/events.ts) ·
 route [`apps/api/src/routes/events.ts`](../apps/api/src/routes/events.ts) ·
@@ -312,6 +317,26 @@ BEGIN
     6. accepted++, advance agent last_seen
 COMMIT
 ```
+
+As of Step 19 that runs as **staged phases** rather than one pass per event,
+because two families of lock are now involved:
+
+```text
+BEGIN                            (ONE transaction for the whole batch)
+  1. lock every event identity, sorted by (lockKey, eventId)
+  2. duplicate decision for each event — survivors only continue
+  3. resolve agents for survivors, sorted by external id
+  4. resolve + VALIDATE every precheck_id — incoherent => abort
+  5. lock ledger rows for unprechecked spend, sorted by (agentId, day)
+  6. per survivor, in submission order:
+       runtime block, INSERT, debit if unprechecked spend, last_seen
+COMMIT
+```
+
+Phases 2–4 take no lock a doomed batch would have to release. Phases 1, 3 and 5
+each acquire their whole family in a deterministic total order before the next
+is touched, which is what makes multi-agent batches deadlock-safe — see the
+[global lock order](precheck.md#global-lock-order).
 
 ### Why the lock
 
@@ -674,23 +699,24 @@ are hard-capped partly so a single call cannot become an export.
 
 ---
 
-## Not implemented as of Step 18
+## Not implemented as of Step 19
 
-- **Ledger debit for UNPRECHECKED spend** — the NEXT Credit step. See the
-  warning at the top. When it arrives it hangs off the **same "this event is
-  new" branch** as `last_seen`, which is what makes exactly-once accounting
-  reachable: a duplicate returns before that branch, so it can never produce a
-  second debit, a second receipt effect, a second block, or a false liveness
-  update. It must also stay gated on the **absence** of a valid `precheck_id`,
-  or it would reintroduce exactly the double debit Step 18 closed. The Step 10
-  ordering correction is a prerequisite for both, not a cosmetic cleanup.
 - **Any debit for PRECHECKED spend** — permanently absent by design, not
-  deferred. The precheck committed it.
+  deferred. The precheck committed it, and debiting again is the $4-becomes-$8
+  defect Step 18 closed.
 - **Receipt consumption state** — no consumption flag, no settled-at column, no
-  "this receipt has been used" concept. Receipts are immutable.
-- **Cap enforcement and precheck decisions** — the precheck steps. Ingest reads
-  no policy table and cannot mutate policy.
-- **Plane-owned blocks** — only `source = 'runtime'` is writable here.
+  "this receipt has been used" concept. Receipts are immutable, and exactly-once
+  comes from event identity plus one transaction instead.
+- **Cap enforcement on reported spend** — recording is not deciding. Ingest
+  reads no policy table and cannot mutate policy, so an over-cap or paused-agent
+  report is recorded truthfully rather than refused.
+- **Plane-owned blocks** — only `source = 'runtime'` is writable here. An
+  over-cap report is not a denial.
+- **Synthetic receipts** — an unprechecked spend records no decision, because
+  none was made.
+- **Publish accounting from events** — there is no `publish.recorded`, and an
+  `agent.action` reporting a publish does not increment a counter the precheck
+  already moved.
 - **Precheck receipt creation** — ingest can verify a receipt, never issue one.
 - **Bulk export** (AC-16) and **rollups/summaries** (AC-17).
 - **Block and receipt detail views** — linkage ids only.

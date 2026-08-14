@@ -171,16 +171,35 @@ and the receipt can cite a version that genuinely produced it.
 ### Global lock order
 
 ```text
+0. event identity advisory locks   (ingest only, own domain tag)
 1. precheck action advisory lock
-2. workspace_policy_state      (FOR SHARE in precheck, FOR UPDATE in Step 13)
-3. ledger_daily row            (FOR UPDATE)
+2. workspace_policy_state          (FOR SHARE in precheck, FOR UPDATE in Step 13)
+3. agents row upsert               (ingest only)
+4. ledger_daily row                (FOR UPDATE)
 ```
 
-Every service taking more than one takes them in this order. Step 13's policy
-mutation takes only (2). Step 10's event ingest takes only its own advisory
-family, under a different domain tag so an `event_id` and an `action_id` sharing
-text never share a lock. **Nothing takes the ledger before the policy**, so no
-cycle can form.
+Every service taking more than one takes them in this order, and acquires each
+family **completely, in a deterministic total order**, before touching the next.
+
+| Service | Takes |
+| --- | --- |
+| Precheck decision | 1 → 2 → 4 |
+| Policy mutation (Step 13) | 2 only |
+| Event ingest (Steps 10, 19) | 0 → 3 → 4 |
+
+**Nothing takes the ledger before the policy**, so no cycle can form there.
+
+**Ingest and precheck cannot deadlock either.** The only family they share is
+(4). Ingest never wants (1) or (2); precheck never wants (0) or (3). So precheck
+may wait on ingest, but ingest can never wait on precheck — and a cycle needs
+both directions.
+
+**Two ingest batches cannot deadlock.** Within (0), (3) and (4) the acquisition
+sequence is sorted — event locks by `(lockKey, eventId)`, agents by external id,
+ledger rows by `(agentId, day)` — so two batches naming the same resources in
+opposite submission order still request them in the same sequence. And because
+every (0) lock is held before any (4) lock is requested, no transaction ever
+holds a ledger row while waiting for an event lock.
 
 ---
 

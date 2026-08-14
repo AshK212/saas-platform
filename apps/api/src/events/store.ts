@@ -4,10 +4,14 @@ import {
   createBlockRepository,
   createEventRepository,
   createIngestLockRepository,
+  createLedgerRepository,
   createPrecheckReceiptRepository,
+  toUtcAccountingDay,
+  type AgentRow,
   type AuthenticatedApiCredential,
   type DatabaseClient,
   type EventRow,
+  type LockedDailyLedger,
 } from '@hybrid/db';
 
 import { checkPrecheckLinkage } from './settlement.js';
@@ -26,17 +30,24 @@ import { checkPrecheckLinkage } from './settlement.js';
  *
  * ─── THE ALGORITHM ────────────────────────────────────────────────────────
  *
- *   BEGIN                              (one transaction for the whole batch)
- *     lock every event identity in the batch, in deterministic key order
- *     for each event:
- *       1. SELECT the event by (workspace_id, event_id)
- *          if present -> duplicates++, CONTINUE. No further work at all.
- *       2. discover/resolve the agent      - WITHOUT touching last_seen
- *       3. resolve + VALIDATE precheck_id  - incoherent => abort whole batch
- *       4. resolve/create runtime block    - idempotent on external id
- *       5. INSERT event ON CONFLICT DO NOTHING RETURNING
- *       6. accepted++, advance agent last_seen
+ *   BEGIN                            (ONE transaction for the whole batch)
+ *     1. lock every event identity, in deterministic key order
+ *     2. for each event: SELECT by (workspace_id, event_id)
+ *          present -> duplicates++, DROP IT. No further work at all.
+ *     3. resolve agents for the SURVIVORS, sorted by external id
+ *     4. resolve + VALIDATE every precheck_id  - incoherent => abort the batch
+ *     5. lock ledger rows for unprechecked spend, sorted by (agent, day)
+ *     6. for each survivor, in submission order:
+ *          resolve/create runtime block   - idempotent on external id
+ *          INSERT event ON CONFLICT DO NOTHING RETURNING
+ *          debit the ledger IF unprechecked spend
+ *          accepted++, advance agent last_seen
  *   COMMIT
+ *
+ * Staged rather than one pass per event because two families of lock are now
+ * involved. Phases 2-4 take no locks a doomed batch would have to release, and
+ * phases 1, 3 and 5 each acquire their whole family in a deterministic total
+ * order before the next family is touched. See "lock order" below.
  *
  * ─── WHY THE LOCK ─────────────────────────────────────────────────────────
  *
@@ -80,23 +91,54 @@ import { checkPrecheckLinkage } from './settlement.js';
  * mutable settlement state exists: the linkage lives on `events.precheck_id`,
  * which the insert already carried. Receipts stay immutable evidence.
  *
- * ─── WHAT THIS DELIBERATELY DOES NOT DO ───────────────────────────────────
+ * ─── AUTHORITATIVE EVENT ACCOUNTING (Step 19) ─────────────────────────────
  *
- * NO LEDGER DEBIT, ON EITHER PATH.
+ * A `spend.recorded` event debits the authoritative UTC-day ledger IF AND ONLY
+ * IF it carries no `precheck_id`:
  *
- *   PRECHECKED spend   -> the precheck already debited. Debiting here would
- *                         double-count, and this is the whole point of Step 18.
- *   UNPRECHECKED spend -> still does NOT debit. That deficiency remains
- *                         intentionally open for the NEXT Credit step.
+ *   PRECHECKED spend   -> the precheck already committed it. Debiting here
+ *                         would double-count. Step 18 guarantee, unchanged.
+ *   UNPRECHECKED spend -> the spend already happened and is being reported.
+ *                         The event IS the accounting record, and it debits
+ *                         exactly once.
  *
- * When event-side accounting does arrive, it hangs off the SAME "this event is
- * new" branch below, which is what makes exactly-once accounting reachable: a
- * duplicate never gets far enough to debit anything. It must also remain gated
- * on the ABSENCE of a valid `precheck_id`.
+ * The classification is the PRESENCE of a validated receipt, never what that
+ * receipt recorded. A `watch` precheck deliberately committed nothing, and its
+ * follow-up event must not commit on its behalf.
  *
- * No precheck receipts are created or modified, no caps enforced, no
- * plane-owned blocks written, and no policy read or mutated - this module
- * imports no policy table and no ledger repository.
+ * Exactly-once falls out of the structure rather than a flag: the debit hangs
+ * off the "this event is new" branch, so a duplicate never reaches it. There is
+ * no `settled` / `accounted` / `debited` column anywhere, and no need for one.
+ *
+ * ─── RECORDING IS NOT DECIDING ────────────────────────────────────────────
+ *
+ * NO POLICY IS READ ON THIS PATH. `POST /v1/actions/precheck` asks whether an
+ * action MAY happen; this records that one DID. A paused agent's reported spend
+ * is still recorded, and committed usage may legitimately exceed a configured
+ * cap - $41 against a $25 cap is the truth, and clamping it would hide the
+ * overspend an operator most needs to see.
+ *
+ * ─── LOCK ORDER ───────────────────────────────────────────────────────────
+ *
+ * This module takes two families, always in this sequence, each family fully
+ * acquired in a deterministic total order before the next is touched:
+ *
+ *   1. event identity advisory locks   sorted by (lockKey, eventId)
+ *   2. agents rows (upsert)            sorted by external id
+ *   3. ledger_daily rows FOR UPDATE    sorted by (agentId, day)
+ *
+ * The precheck engine takes precheck-advisory -> policy -> ledger and never
+ * touches (1) or (2); this module never touches policy or precheck-advisory.
+ * The only shared family is the ledger, and no transaction here holds a ledger
+ * row while waiting for anything the precheck engine holds - so no cycle can
+ * form between the two. See docs/precheck.md for the global order.
+ *
+ * ─── WHAT THIS STILL DELIBERATELY DOES NOT DO ─────────────────────────────
+ *
+ * No precheck receipts are created or modified - an unprechecked spend gets NO
+ * synthetic "allow" receipt, because no decision was made. No plane-owned
+ * blocks: an over-cap report is not a denial. No caps enforced, and no policy
+ * read or mutated - this module imports no policy table.
  */
 
 /** Outcome of ingesting one batch. */
@@ -155,87 +197,176 @@ export function createDrizzleEventIngestStore(db: DatabaseClient): EventIngestSt
       // Scope comes from the credential row. Nothing in the body contributed.
       const scope = credential.scope;
 
+      // ONE server instant for the whole batch. `received_at` and the UTC
+      // accounting day both derive from it, so an event received at 23:59:59.9
+      // can never be audited on day N and accounted on day N+1.
+      const accountingDay = toUtcAccountingDay(now);
+
       return db.transaction(async (tx) => {
+        // EVERY repository is built on `tx`. A single one built on `db` would
+        // silently run outside the transaction, and a ledger debit that
+        // committed while its event rolled back is money without an audit row.
         const agentRepo = createAgentRepository(tx, scope);
         const eventRepo = createEventRepository(tx, scope);
         const blockRepo = createBlockRepository(tx, scope);
         const receiptRepo = createPrecheckReceiptRepository(tx, scope);
+        const ledgerRepo = createLedgerRepository(tx, scope);
         const lockRepo = createIngestLockRepository(tx, scope);
 
-        // Serialize on every identity in the batch UP FRONT, in deterministic
-        // key order. Up front rather than per-event so the ordering is over the
-        // whole batch: interleaving "lock E1, work, lock E2" with another batch
+        // ─── PHASE 1: EVENT IDENTITY LOCKS ────────────────────────────────
+        //
+        // Every identity in the batch, up front, in deterministic key order.
+        // Up front rather than per-event so the ordering is over the WHOLE
+        // batch: interleaving "lock E1, work, lock E2" with another batch
         // doing the reverse is exactly the deadlock this avoids.
         await lockRepo.lockEvents(events.map((event) => event.event_id));
 
-        const unresolved: UnresolvedReference[] = [];
         let accepted = 0;
         let duplicates = 0;
 
+        // ─── PHASE 2: THE DUPLICATE DECISION, BEFORE ANY SIDE EFFECT ──────
+        //
+        // Authoritative because this batch holds the advisory lock for each
+        // identity: no concurrent transaction can be inserting one underneath
+        // us. A duplicate is counted here having read one row and changed
+        // NOTHING - no agent discovered, no receipt consulted, no block
+        // created, no ledger row locked, no debit, no last-seen moved. Its
+        // replacement payload is never even examined.
+        //
+        // This matters more now than it did in Step 10: reaching accounting is
+        // now a money effect, so the gate has to hold before anything else.
+        const fresh: { index: number; event: IngestEvent }[] = [];
         for (const [index, event] of events.entries()) {
-          // 1. THE DUPLICATE DECISION, BEFORE ANY SIDE EFFECT.
-          //
-          //    Authoritative because the advisory lock for this identity is
-          //    held: no concurrent transaction can be inserting it underneath
-          //    us. A duplicate returns here having read one row and changed
-          //    nothing - no agent discovered, no receipt consulted, no block
-          //    created, no last-seen moved. The replacement payload is never
-          //    even examined.
           if ((await eventRepo.findByEventId(event.event_id)) !== null) {
             duplicates += 1;
             continue;
           }
+          fresh.push({ index, event });
+        }
 
-          // Everything below runs ONLY for a genuinely new event.
+        // Everything below runs ONLY for genuinely new events.
 
-          // 2. Agent - discovered on first sight, no activity claimed yet.
-          const agent = await agentRepo.discover(event.agent_id, now);
+        // ─── PHASE 3: AGENT RESOLUTION, IN DETERMINISTIC ORDER ────────────
+        //
+        // `discover` is an upsert, so it takes a ROW LOCK on the agent. Two
+        // batches naming the same agents in opposite sequence could otherwise
+        // deadlock on those rows, so resolution is sorted by external id and
+        // deduplicated. Sorting also means the agent locks are all held before
+        // any ledger lock is requested, which is what keeps the two families
+        // acyclic.
+        const agentByExternalId = new Map<string, AgentRow>();
+        const externalIds = [...new Set(fresh.map(({ event }) => event.agent_id))].sort();
+        for (const externalId of externalIds) {
+          agentByExternalId.set(externalId, await agentRepo.discover(externalId, now));
+        }
 
-          // 3. Precheck linkage - SETTLEMENT (Step 18).
-          //
-          //    A reference that does not resolve in THIS workspace fails the
-          //    batch rather than being quietly dropped: silently storing the
-          //    event without the linkage the caller asked for would be a silent
-          //    drop of meaning.
-          //
-          //    The lookup is workspace-scoped IN SQL, so another tenant's
-          //    receipt is never returned and reads identically to one that does
-          //    not exist. No JavaScript compares workspace ids afterwards.
-          //
-          //    Resolving is not enough. `precheck_id` says "this action was
-          //    already authorized and already accounted for", and the plane
-          //    acts on that by NOT debiting again. An unchecked claim would
-          //    therefore be a way to make spend vanish - so the claim must be
-          //    coherent with what the receipt actually records.
-          let precheckReceiptId: string | undefined;
-          if (event.precheck_id !== undefined) {
-            const receipt = await receiptRepo.findById(event.precheck_id);
-            if (receipt === null) {
-              // A receipt in another workspace is reported identically to one
-              // that does not exist.
-              unresolved.push({
-                index,
-                field: 'precheck_id',
-                message: 'Unknown precheck_id for this workspace.',
-              });
-              continue;
-            }
+        /** The agent for an event. Present by construction after phase 3. */
+        const agentFor = (event: IngestEvent): AgentRow => {
+          const agent = agentByExternalId.get(event.agent_id);
+          if (agent === undefined) {
+            throw new Error('Agent was not resolved for a new event.');
+          }
+          return agent;
+        };
 
-            const linkage = checkPrecheckLinkage(event, receipt, agent.id);
-            if (!linkage.ok) {
-              unresolved.push({ index, field: 'precheck_id', message: linkage.message });
-              continue;
-            }
-            precheckReceiptId = receipt.id;
+        // ─── PHASE 4: SETTLEMENT VALIDATION (Step 18) ─────────────────────
+        //
+        // Read-only, but it can REJECT - so it runs before any lock is taken
+        // that a doomed transaction would only have to release. A reference
+        // that does not resolve in THIS workspace fails the batch rather than
+        // being quietly dropped: silently storing the event without the
+        // linkage the caller asked for would be a silent drop of meaning.
+        //
+        // The lookup is workspace-scoped IN SQL, so another tenant's receipt is
+        // never returned and reads identically to one that does not exist.
+        const unresolved: UnresolvedReference[] = [];
+        /** Event index -> validated receipt id. Absence means unprechecked. */
+        const linkedReceipt = new Map<number, string>();
+
+        for (const { index, event } of fresh) {
+          if (event.precheck_id === undefined) {
+            continue;
+          }
+          const receipt = await receiptRepo.findById(event.precheck_id);
+          if (receipt === null) {
+            unresolved.push({
+              index,
+              field: 'precheck_id',
+              message: 'Unknown precheck_id for this workspace.',
+            });
+            continue;
           }
 
-          // 4. Runtime block. The wire `block_id` is the client's opaque
-          //    string; the column `events.block_id` is the internal UUID, so
-          //    this resolves external -> internal and never casts the string.
+          const linkage = checkPrecheckLinkage(event, receipt, agentFor(event).id);
+          if (!linkage.ok) {
+            unresolved.push({ index, field: 'precheck_id', message: linkage.message });
+            continue;
+          }
+          linkedReceipt.set(index, receipt.id);
+        }
+
+        if (unresolved.length > 0) {
+          // Rolls the transaction back: no partial batch is ever committed.
+          throw new UnresolvedReferenceError(unresolved);
+        }
+
+        // ─── PHASE 5: LEDGER LOCKS, IN DETERMINISTIC ORDER ────────────────
+        //
+        //   THE ACCOUNTING CLASSIFICATION, IN ONE PLACE.
+        //
+        // A `spend.recorded` event debits the authoritative ledger if and only
+        // if it carries NO `precheck_id`. With one, the precheck already
+        // committed the usage and debiting here would double-count - that is
+        // the Step 18 guarantee, and it is decided by the PRESENCE of a
+        // validated receipt, never by what mode that receipt recorded. A
+        // `watch` precheck deliberately committed nothing, and its follow-up
+        // event must not retroactively commit on its behalf.
+        //
+        // Locks are acquired here, before any mutation, sorted by
+        // `(agentId, day)`. Two batches carrying the same agents in opposite
+        // sequence therefore request the rows in the same sequence and cannot
+        // form a cycle. The day is constant across a batch - one server instant
+        // - but it is part of the sort key so this stays correct if that ever
+        // changes.
+        const debits = fresh.filter(
+          ({ index, event }) => event.type === 'spend.recorded' && !linkedReceipt.has(index),
+        );
+
+        const ledgerKeys = [
+          ...new Map(
+            debits.map(({ event }) => {
+              const agentId = agentFor(event).id;
+              return [`${agentId}\u0000${accountingDay}`, agentId] as const;
+            }),
+          ),
+        ].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+
+        /** One locked capability per agent-day, REUSED across the batch. */
+        const ledgerByAgent = new Map<string, LockedDailyLedger>();
+        for (const [, agentId] of ledgerKeys) {
+          // The capability tracks committed state across mutations, so several
+          // spends for one agent in one batch reuse it without an unlocked
+          // re-read and without taking the row lock twice.
+          const locked = await ledgerRepo.lockDailyLedger(agentId, accountingDay);
+          if (locked === null) {
+            // Unreachable: the agent was resolved inside this very scope in
+            // phase 3, so it belongs to this workspace by construction.
+            throw new Error('Ledger unavailable for an agent in this workspace.');
+          }
+          ledgerByAgent.set(agentId, locked);
+        }
+
+        // ─── PHASE 6: EFFECTS, IN SUBMISSION ORDER ────────────────────────
+        for (const { index, event } of fresh) {
+          const agent = agentFor(event);
+
+          // Runtime block. The wire `block_id` is the client's opaque string;
+          // the column `events.block_id` is the internal UUID, so this resolves
+          // external -> internal and never casts the string.
           //
-          //    Reached only for a new event. A DIFFERENT new event may still
-          //    legitimately reference an existing external block and reuse that
-          //    row - that is block dedup, not replay.
+          // A DIFFERENT new event may legitimately reference an existing
+          // external block and reuse that row - that is block dedup, not
+          // replay.
           let blockId: string | undefined;
           if (event.type === 'action.blocked' && event.block_id !== undefined) {
             const block = await blockRepo.resolveOrCreateRuntimeBlock({
@@ -250,9 +381,12 @@ export function createDrizzleEventIngestStore(db: DatabaseClient): EventIngestSt
             blockId = block.id;
           }
 
-          // 5. The insert. `ON CONFLICT DO NOTHING` is retained as DATABASE
-          //    defense in depth beneath the lock - correctness must not depend
-          //    on advisory locking alone.
+          // The insert. `ON CONFLICT DO NOTHING` is retained as DATABASE
+          // defense in depth beneath the lock - correctness must not depend on
+          // advisory locking alone.
+          //
+          // IT COMES BEFORE THE DEBIT deliberately: if the constraint reveals a
+          // duplicate the lock somehow missed, no money has moved yet.
           const inserted = await eventRepo.insertIfNew({
             eventId: event.event_id,
             agentId: agent.id,
@@ -262,32 +396,48 @@ export function createDrizzleEventIngestStore(db: DatabaseClient): EventIngestSt
             // Validated data, not raw request bytes - so no credential or
             // header material can reach the audit record.
             payload: event,
-            precheckReceiptId,
+            precheckReceiptId: linkedReceipt.get(index),
             blockId,
             occurredAt: event.occurred_at === undefined ? undefined : new Date(event.occurred_at),
             // SERVER time. `occurred_at` above is untrusted client metadata and
-            // never becomes the authoritative ingest instant.
+            // never becomes the authoritative ingest instant, and never selects
+            // the accounting day.
             receivedAt: now,
           });
 
           if (inserted === null) {
             // Unreachable while the lock holds and the transaction runs at READ
-            // COMMITTED: step 1 already established absence. Reaching it means
+            // COMMITTED: phase 2 already established absence. Reaching it means
             // the constraint caught something the lock did not, so the safe
-            // reading is "already present" - count it, change nothing further.
+            // reading is "already present" - count it, and debit nothing.
             duplicates += 1;
             continue;
           }
 
-          // 6. Once-only side effects, on the new-event path only. Future
-          //    ledger and accounting effects belong exactly here.
+          // ─── AUTHORITATIVE ACCOUNTING (Step 19) ─────────────────────────
+          //
+          // Reached only for a NEW, accepted, UNPRECHECKED spend event, on the
+          // same transaction as the row that explains it.
+          //
+          // NO POLICY IS CONSULTED. This records spend that ALREADY HAPPENED;
+          // it does not ask whether it should have been allowed. A paused agent
+          // or an over-cap total still records truthfully - suppressing it
+          // would make the ledger a statement about policy rather than about
+          // money, and would hide exactly the overspend an operator needs to
+          // see.
+          if (event.type === 'spend.recorded' && !linkedReceipt.has(index)) {
+            const ledger = ledgerByAgent.get(agent.id);
+            if (ledger === undefined) {
+              // Unreachable: phase 5 locked every agent in `debits`.
+              throw new Error('Ledger capability missing for an unprechecked spend.');
+            }
+            // The LOCKED capability is the only way to mutate the row. Exact
+            // micro-dollar arithmetic; capacity is checked before the write.
+            await ledger.commitSpend(event.amount_usd);
+          }
+
           accepted += 1;
           await agentRepo.touchLastSeen(agent.id, now);
-        }
-
-        if (unresolved.length > 0) {
-          // Rolls the transaction back: no partial batch is ever committed.
-          throw new UnresolvedReferenceError(unresolved);
         }
 
         return { accepted, duplicates };

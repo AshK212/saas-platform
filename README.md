@@ -2,7 +2,7 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 18, precheck-linked event settlement.**
+**Current phase: Credit — Step 19, authoritative event accounting.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
@@ -12,8 +12,8 @@ event timeline with raw JSON drill-through, machine policy polling via
 authoritative per-agent UTC-day ledger with exact micro-dollar arithmetic, the
 governance decision engine at `POST /v1/actions/precheck` with plane-owned
 blocks for every denial, the operator governance surface — fleet enforcement
-state, decision receipts and block detail — and precheck-linked event settlement
-with a no-double-debit guarantee.
+state, decision receipts and block detail — and authoritative spend accounting
+from both the precheck and the event path, with a no-double-debit guarantee.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
 exports, rollups, sharing, gone-dark alerting or demo. **Being signed in grants
@@ -38,14 +38,16 @@ on every request.
 > a bearer API key. The timeline accepts only a session cookie. A machine that
 > can submit events cannot read the tenant's history back.
 
-> **The precheck accounts; the event records.** A follow-up event carrying a
-> `precheck_id` links to the durable receipt and **never debits the ledger
-> again** — $4 prechecked and then reported stays $4, not $8. The claim is
-> verified first: same workspace, same agent, same category, same amount, and a
-> decision consistent with what the event says happened.
+> **ONE LEDGER, TWO PATHS, ONE DEBIT PER ACTION.** A precheck ALLOW commits the
+> usage, and its follow-up event is audit evidence that debits nothing — $4
+> prechecked and then reported stays $4, not $8. An **unprechecked**
+> `spend.recorded` is the accounting record itself and debits exactly once, made
+> idempotent by event identity rather than by any bookkeeping flag.
 >
-> **`spend.recorded` WITHOUT a `precheck_id` still does not debit the ledger.**
-> That is a known deficiency and the next Credit step. See
+> **Recording is not deciding.** The event path reads no policy: a paused
+> agent's reported spend is still recorded, and committed usage may exceed a
+> configured cap. $41 against a $25 cap is the truth, and clamping it would hide
+> the overspend. See [the ledger](docs/ledger.md) and
 > [event contracts](docs/event-contracts.md).
 
 ---
@@ -280,8 +282,7 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 18: event-driven spend
-debit for unprechecked spend, block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
+The following are **deliberately absent** as of Step 19: block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
 detection, share links, the public demo, simulator scenarios, and any
 Hermes/OpenClaw runtime integration.
 

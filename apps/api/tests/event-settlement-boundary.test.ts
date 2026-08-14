@@ -41,27 +41,54 @@ const SETTLEMENT = path.join(API_SRC, 'events', 'settlement.ts');
 const RECEIPTS_REPO = path.join(DB_SRC, 'repositories', 'receipts.ts');
 
 describe('THE LINKED EVENT PATH CANNOT DEBIT THE LEDGER', () => {
-  it('event ingest imports no ledger repository', () => {
+  /**
+   * Step 19 gave event ingest a ledger, so "imports nothing" is no longer the
+   * invariant. The narrower - and now load-bearing - one is that the debit is
+   * gated on the ABSENCE of a validated receipt, in exactly two places.
+   */
+  it('EVERY ledger commit is gated on the absence of a precheck', () => {
     const source = code(INGEST_STORE);
 
-    // PROBE A. This is the whole point of Step 18: a precheck already
-    // committed the usage, so a debit here would double-count.
-    for (const ledger of [
-      'createLedgerRepository',
-      'lockDailyLedger',
-      'findDailyLedger',
-      'LockedDailyLedger',
+    // PROBE C. Both the lock-selection filter and the debit itself carry the
+    // same guard, so neither can drift without the other.
+    const commits = [...source.matchAll(/await ledger\.commitSpend\(/g)];
+    expect(commits).toHaveLength(1);
+
+    for (const gate of [
+      "event.type === 'spend.recorded' && !linkedReceipt.has(index)",
     ]) {
-      expect(source, ledger).not.toContain(ledger);
+      // Once for the lock set, once for the debit.
+      expect([...source.matchAll(new RegExp(gate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))])
+        .toHaveLength(2);
     }
   });
 
-  it('event ingest commits no spend or publish', () => {
+  it('the classification is receipt PRESENCE, never receipt content', () => {
     const source = code(INGEST_STORE);
 
-    for (const mutation of ['commitSpend', 'commitPublish']) {
-      expect(source, mutation).not.toContain(mutation);
-    }
+    // A `watch` precheck committed nothing. If the debit keyed off the
+    // receipt's mode instead of its presence, a watch-linked event would
+    // retroactively commit on its behalf.
+    expect(source).not.toContain('appliedMode');
+    expect(source).not.toMatch(/receipt\.(?:decision|category|appliedMode)\s*===[\s\S]{0,80}commitSpend/);
+  });
+
+  it('event ingest never commits a publish', () => {
+    const source = code(INGEST_STORE);
+
+    // Publishes are counted by the precheck only. There is no
+    // `publish.recorded` event, and an `agent.action` reporting one must not
+    // increment a counter the precheck already moved.
+    expect(source).not.toContain('commitPublish');
+  });
+
+  it('event ingest never READS the ledger for a decision', () => {
+    const source = code(INGEST_STORE);
+
+    // Recording is not deciding: nothing here compares committed usage to
+    // anything. `findDailyLedger` is the observability read and has no place
+    // on a write path.
+    expect(source).not.toContain('findDailyLedger');
   });
 
   it('the settlement rules touch no persistence at all', () => {
@@ -279,8 +306,8 @@ describe('RECEIPTS REMAIN IMMUTABLE', () => {
   it('the linkage is stored on the EVENT row', () => {
     const source = code(INGEST_STORE);
 
-    expect(source).toContain('precheckReceiptId');
-    expect(source).toContain('precheckReceiptId = receipt.id');
+    expect(source).toContain('linkedReceipt.set(index, receipt.id)');
+    expect(source).toContain('precheckReceiptId: linkedReceipt.get(index)');
   });
 });
 
@@ -379,8 +406,37 @@ describe('the fake and production share one rule', () => {
 
     expect(fake).toContain('checkPrecheckLinkage(');
     expect(fake).toContain("from '../../src/events/settlement'");
-    // And it does not grow its own ledger.
-    expect(fake).not.toContain('commitSpend');
-    expect(fake).not.toContain('spendCommittedUsd');
+  });
+
+  it('the fake debits on the SAME gate as production', () => {
+    // Step 19 gave the fake a ledger on purpose - shared with the precheck
+    // fake, so `$4 not $8` is a real in-process assertion rather than a
+    // property that holds because the event store had nowhere to write.
+    //
+    // It must classify identically, or the route tests prove the wrong thing.
+    const fake = code(path.join(API_SRC, '..', 'tests', 'helpers', 'memory-event-store.ts'));
+
+    expect(fake).toContain("event.type === 'spend.recorded' && precheckReceiptId === null");
+    expect([...fake.matchAll(/\.commitSpend\(/g)]).toHaveLength(1);
+
+    // Same server instant, same day derivation as production. Scoped to the
+    // ARGUMENT of the day derivation: storing `occurred_at` on the event row
+    // is correct and has nothing to do with which day is debited.
+    const days = [...fake.matchAll(/toUtcAccountingDay\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(days).toEqual(['now']);
+  });
+
+  it('both fakes share ONE ledger', () => {
+    // Production has one `ledger_daily`. Two independent fakes would make a
+    // double debit unobservable in process.
+    const eventFake = code(path.join(API_SRC, '..', 'tests', 'helpers', 'memory-event-store.ts'));
+    const precheckFake = code(
+      path.join(API_SRC, '..', 'tests', 'helpers', 'memory-precheck-store.ts'),
+    );
+
+    for (const fake of [eventFake, precheckFake]) {
+      expect(fake).toContain("from './memory-ledger'");
+      expect(fake).toContain('shared');
+    }
   });
 });

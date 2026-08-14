@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
 import type { IngestEvent } from '@hybrid/contracts';
-import type { AuthenticatedApiCredential } from '@hybrid/db';
+import { toUtcAccountingDay, type AuthenticatedApiCredential } from '@hybrid/db';
 
 import { checkPrecheckLinkage, type SettlementReceipt } from '../../src/events/settlement';
+import { createMemoryLedger, type MemoryLedger } from './memory-ledger';
 import {
   UnresolvedReferenceError,
   type EventIngestStore,
@@ -97,11 +98,15 @@ export interface MemoryEventStore extends EventIngestStore {
    * id-shape mismatch rather than a convenient equality.
    */
   seedReceipt(workspaceId: string, facts?: SeedReceiptFacts): string;
+  /** The SHARED authoritative ledger, as the precheck engine also sees it. */
+  readonly ledger: MemoryLedger;
   /** Forces the persistence layer to fail, to exercise rollback. */
   failOnEventId: string | null;
 }
 
-export function createMemoryEventStore(): MemoryEventStore {
+export function createMemoryEventStore(
+  shared: MemoryLedger = createMemoryLedger(),
+): MemoryEventStore {
   const events: StoredEvent[] = [];
   const agents: StoredAgent[] = [];
   const blocks: StoredBlock[] = [];
@@ -123,6 +128,7 @@ export function createMemoryEventStore(): MemoryEventStore {
     agents,
     blocks,
     receipts,
+    ledger: shared,
 
     seedReceipt(workspaceId: string, facts: SeedReceiptFacts = {}): string {
       const id = randomUUID();
@@ -158,6 +164,7 @@ export function createMemoryEventStore(): MemoryEventStore {
       const eventSnapshot = [...events];
       const agentSnapshot = agents.map((a) => ({ ...a }));
       const blockSnapshot = [...blocks];
+      const ledgerSnapshot = shared.snapshot();
 
       const rollback = (): void => {
         events.length = 0;
@@ -166,6 +173,7 @@ export function createMemoryEventStore(): MemoryEventStore {
         agents.push(...agentSnapshot);
         blocks.length = 0;
         blocks.push(...blockSnapshot);
+        shared.restore(ledgerSnapshot);
       };
 
       const unresolved: UnresolvedReference[] = [];
@@ -263,7 +271,15 @@ export function createMemoryEventStore(): MemoryEventStore {
             receivedAt: now,
           });
 
-          // 6. Once-only side effect, only for a genuinely new event.
+          // 6. AUTHORITATIVE ACCOUNTING (Step 19), on the accepted-new branch
+          //    only, and ONLY when no precheck already committed this usage.
+          if (event.type === 'spend.recorded' && precheckReceiptId === null) {
+            shared
+              .lockDay(workspaceId, event.agent_id, toUtcAccountingDay(now))
+              .commitSpend(event.amount_usd);
+          }
+
+          // 7. Once-only side effects, only for a genuinely new event.
           accepted += 1;
           agent.lastSeenAt = now;
         }

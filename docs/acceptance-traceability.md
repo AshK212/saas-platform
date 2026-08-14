@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-14** (Step 18 — precheck-linked event settlement).
+Last updated: **2026-08-14** (Step 19 — authoritative event accounting).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -453,7 +453,58 @@ still does not debit the authoritative ledger. That is the next Credit step, and
 Step 18 deliberately did not move it in either direction so the linked path
 could be reviewed on its own.
 
-## Summary at Step 18
+## Step 19 note: authoritative event accounting
+
+Step 19 changed **no acceptance criterion's status**. It closed the last
+authoritative accounting gap in the Credit phase.
+
+A NEW `spend.recorded` event carrying no `precheck_id` now debits the
+authoritative UTC-day ledger **exactly once**. Before this, reported spend was
+stored as audit data and moved no money, so an operator's "today's spend" was
+only ever the prechecked subset.
+
+The final model is two ingestion paths and one debit per economic action:
+
+| Path | Trigger | Idempotency |
+| --- | --- | --- |
+| A | precheck **ALLOW** | `(workspace_id, action_id)` + advisory lock |
+| B | NEW **unprechecked** `spend.recorded` | `(workspace_id, event_id)` + advisory lock |
+
+The Step 18 linkage is what keeps B off a prechecked action, and event identity
+is what makes B idempotent. **There is no `settled` / `accounted` / `debited`
+column** — exactly-once falls out of the duplicate gate plus one transaction,
+and a flag would be redundant state that could disagree with the event row.
+
+Four decisions carry weight:
+
+- **RECORDING IS NOT DECIDING.** The event path reads no policy. `precheck` asks
+  whether an action *may* happen; this records that one *did*. A paused agent's
+  reported spend is still recorded, and committed usage may legitimately exceed
+  a configured cap. `$41` against a `$25` cap is the truth — clamping it would
+  make the ledger a statement about policy rather than about money, and would
+  hide the overspend an operator most needs to see. Only `numeric(14,6)`
+  capacity can refuse, and it fails the whole batch rather than truncating.
+- **The classification is receipt PRESENCE, not receipt content.** A `watch`
+  precheck deliberately committed nothing; keying the debit off "the ledger did
+  not move" would make its follow-up event commit on its behalf.
+- **The batch became a staged transaction.** Two lock families are now
+  involved, so ingest acquires each one completely, in a deterministic total
+  order, before touching the next: event advisory locks by `(lockKey, eventId)`,
+  agent rows by external id, then ledger rows by `(agentId, day)`. Without the
+  last sort, two batches naming agents `[A,B]` and `[B,A]` would deadlock.
+- **Agent-row ordering was a pre-existing hazard, now fixed.** `discover` is an
+  upsert and takes a row lock; Step 10 resolved agents in submission order. The
+  restructure sorts them, which removes a deadlock that predates Step 19.
+
+**Verification honesty.** The in-process suite can now observe a double debit
+for the first time: both fakes share one `MemoryLedger`, as production shares
+one `ledger_daily`. Probe C (debit prechecked spend too) fails with
+`expected '8.000000' to be '4.000000'` — the exact defect, caught behaviourally
+rather than only by a source guard, which was the limitation reported in Step 18.
+Concurrency, lost updates and deadlock remain provable only against real
+PostgreSQL, and those 18 tests are skipped.
+
+## Summary at Step 19
 
 - `PASS`: **0**
 - `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **11** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
@@ -476,11 +527,15 @@ no longer a criterion in this group waiting on further implementation.
 **The environment risk is now the entire remaining risk, and it has not narrowed
 at any point.** Eleven criteria are code-complete and **none** has ever run
 against a real database. Every concurrency, atomicity, isolation and
-accounting-day guarantee in Steps 10–18 is argued and tested-but-unrun. The
+accounting-day guarantee in Steps 10–19 is argued and tested-but-unrun. The
 number of unverified criteria has grown at every step since Step 5; Step 17
-added 18 skipped live tests and Step 18 adds 13 more — including the only test
-that can actually observe the no-double-debit invariant against one real
-`ledger_daily` table.
+added 18 skipped live tests, Step 18 added 13, and Step 19 adds 18 more —
+including the only tests that can observe a lost update, a concurrent replay,
+or a multi-agent deadlock at all.
+
+**The Credit accounting contract is now code-complete.** Every path that can
+move money exists, and each is idempotent by construction. What has never
+happened is any of it running against a real database.
 
 ## Step 3 note: relational foundation per criterion
 

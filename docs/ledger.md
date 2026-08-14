@@ -1,17 +1,36 @@
 # The Authoritative UTC-Day Ledger
 
-> **Step 14 implements ledger primitives only. Decision/enforcement begins
-> Step 15.**
->
-> Nothing here decides whether an action is allowed. There is no precheck
-> endpoint, no allow/deny, no receipt, no block, and no HTTP route of any kind.
-> `spend.recorded` still does **not** debit this ledger.
-
 > **THE PLANE IS THE LEDGER; THE PLUGIN IS THE HANDS.**
 >
 > This table is the single authoritative record of what has been committed. A
 > runtime never writes to it. There is no second ledger for prechecks, events or
 > the UI.
+
+> ## Two ingestion paths, one per economic action
+>
+> As of **Step 19** the ledger has exactly two writers:
+>
+> | Path | Trigger | Owner |
+> | --- | --- | --- |
+> | **A** | a precheck **ALLOW** for spend or publish | Step 15 |
+> | **B** | a NEW **unprechecked** `spend.recorded` event | Step 19 |
+>
+> The same economic action uses **exactly one**. A prechecked action takes A,
+> and its follow-up event is audit evidence that debits nothing — the Step 18
+> linkage is what keeps B off it. An unprechecked action takes B, and event
+> identity is what makes B idempotent.
+>
+> There is no `settled` / `accounted` / `debited` column. Exactly-once comes
+> from event identity plus one transaction, not from a flag that could disagree
+> with the event row.
+
+> **Recording is not deciding.** Path B consults **no policy**. A paused agent's
+> reported spend is still recorded, and committed usage may legitimately exceed
+> a configured cap — `$41` against a `$25` cap is the truth. Clamping it would
+> make the ledger a statement about policy rather than about money, and would
+> hide exactly the overspend an operator needs to see. Only `numeric(14,6)`
+> capacity can refuse a write, and it does so by failing the whole batch rather
+> than truncating.
 
 Sources: [`packages/db/src/accounting/money.ts`](../packages/db/src/accounting/money.ts) ·
 [`packages/db/src/accounting/utc-day.ts`](../packages/db/src/accounting/utc-day.ts) ·

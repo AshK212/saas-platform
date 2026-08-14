@@ -10,6 +10,7 @@ import {
 import { toUtcAccountingDay, type AuthenticatedApiCredential } from '@hybrid/db';
 
 import { decide, requiresLedger } from '../../src/precheck/decide';
+ import { createMemoryLedger, type MemoryLedger, type MemoryLedgerRow } from './memory-ledger';
 import { MissingPolicyStateError, type PrecheckOutcome, type PrecheckStore } from '../../src/precheck/store';
 
 /**
@@ -52,13 +53,7 @@ export interface StoredReceipt {
   denyReason: string | null;
 }
 
-interface LedgerRow {
-  workspaceId: string;
-  agentExternalId: string;
-  day: string;
-  spendCommittedUsd: string;
-  publishCountCommitted: number;
-}
+type LedgerRow = MemoryLedgerRow;
 
 /** A plane-owned block, as the decision transaction records it. */
 export interface StoredPlaneBlock {
@@ -104,24 +99,14 @@ export interface MemoryPrecheckStore extends PrecheckStore {
   failReceiptInsert: boolean;
 }
 
-export function createMemoryPrecheckStore(): MemoryPrecheckStore {
+export function createMemoryPrecheckStore(shared: MemoryLedger = createMemoryLedger()): MemoryPrecheckStore {
   const receipts: StoredReceipt[] = [];
-  const ledger: LedgerRow[] = [];
+  const ledger = shared.rows;
   const blocks: StoredPlaneBlock[] = [];
   const agents: { workspaceId: string; externalId: string }[] = [];
   const policies: PolicyRow[] = [];
   const versions = new Map<string, string>();
   const state = { failReceiptInsert: false, failBlockInsert: false };
-
-  function usdAdd(a: string, b: string): string {
-    // Exact micro-dollar integers, matching the production path.
-    const toMicros = (v: string): bigint => {
-      const [whole = '0', fraction = ''] = v.split('.');
-      return BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'));
-    };
-    const total = toMicros(a) + toMicros(b);
-    return `${(total / 1_000_000n).toString()}.${(total % 1_000_000n).toString().padStart(6, '0')}`;
-  }
 
   return {
     receipts,
@@ -184,14 +169,13 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
       const day = toUtcAccountingDay(now);
 
       // Snapshot for rollback - production is one transaction.
-      const ledgerSnapshot = ledger.map((r) => ({ ...r }));
+      const ledgerSnapshot = shared.snapshot();
       const agentSnapshot = agents.map((a) => ({ ...a }));
       const receiptSnapshot = [...receipts];
       const blockSnapshot = [...blocks];
 
       const rollback = (): void => {
-        ledger.length = 0;
-        ledger.push(...ledgerSnapshot);
+        shared.restore(ledgerSnapshot);
         agents.length = 0;
         agents.push(...agentSnapshot);
         receipts.length = 0;
@@ -242,22 +226,10 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
 
       // 4. Ledger, only when this category could commit.
       const needsLedger = requiresLedger(request.category, policy.mode);
-      let row: LedgerRow | undefined;
-      if (needsLedger) {
-        row = ledger.find(
-          (r) => r.workspaceId === workspaceId && r.agentExternalId === request.agent_id && r.day === day,
-        );
-        if (row === undefined) {
-          row = {
-            workspaceId,
-            agentExternalId: request.agent_id,
-            day,
-            spendCommittedUsd: '0.000000',
-            publishCountCommitted: 0,
-          };
-          ledger.push(row);
-        }
-      }
+      // The SHARED ledger - the same rows event ingest debits. That is what
+      // makes the Step 18 no-double-debit assertion real in process.
+      const locked = needsLedger ? shared.lockDay(workspaceId, request.agent_id, day) : null;
+      const row: LedgerRow | undefined = locked?.current;
       const usage = row ?? { spendCommittedUsd: '0.000000', publishCountCommitted: 0 };
 
       // 5. Decide.
@@ -277,11 +249,11 @@ export function createMemoryPrecheckStore(): MemoryPrecheckStore {
       };
 
       // 6. Commit on allow, only through the locked row.
-      if (decision.allow && decision.commit !== 'none' && row !== undefined) {
+      if (decision.allow && decision.commit !== 'none' && locked !== null) {
         if (decision.commit === 'spend') {
-          row.spendCommittedUsd = usdAdd(row.spendCommittedUsd, request.amount_usd ?? '0.000000');
+          locked.commitSpend(request.amount_usd ?? '0.000000');
         } else {
-          row.publishCountCommitted += 1;
+          locked.commitPublish();
         }
       }
 
