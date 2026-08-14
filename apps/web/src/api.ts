@@ -17,6 +17,18 @@ import {
   agentPolicyMutationRequestSchema,
   agentPolicyPath,
   agentPolicyResponseSchema,
+  blockDetailResponseSchema,
+  blockListResponseSchema,
+  receiptDetailResponseSchema,
+  receiptListResponseSchema,
+  workspaceBlockPath,
+  workspaceBlocksPath,
+  workspaceReceiptPath,
+  workspaceReceiptsPath,
+  type BlockDetail,
+  type BlockListResponse,
+  type ReceiptDetail,
+  type ReceiptListResponse,
   currentUserResponseSchema,
   eventDetailResponseSchema,
   type AgentPolicyMutationRequest,
@@ -272,6 +284,110 @@ export async function saveAgentPolicy(
     throw new Error('Unexpected response from the server.');
   }
   return parsed.data;
+}
+
+/**
+ * Lists governance decisions, newest first.
+ *
+ * Filtering happens on the SERVER; the browser sends an external agent id and
+ * a decision, never an internal UUID and never a raw query.
+ */
+export async function fetchReceipts(
+  workspaceId: string,
+  options: { agentId?: string; decision?: 'allow' | 'deny'; cursor?: string } = {},
+): Promise<ReceiptListResponse> {
+  const params = new URLSearchParams();
+  if (options.agentId !== undefined && options.agentId !== '') {
+    params.set('agent_id', options.agentId);
+  }
+  if (options.decision !== undefined) {
+    params.set('decision', options.decision);
+  }
+  if (options.cursor !== undefined && options.cursor !== '') {
+    params.set('cursor', options.cursor);
+  }
+
+  const query = params.toString();
+  const response = await fetch(
+    `${workspaceReceiptsPath(workspaceId)}${query === '' ? '' : `?${query}`}`,
+    { credentials: 'include' },
+  );
+  if (!response.ok) {
+    throw new Error('Could not load decisions.');
+  }
+
+  const parsed = receiptListResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data;
+}
+
+/**
+ * Fetches one decision's full evidence.
+ *
+ * Everything returned was persisted at decision time; nothing is recomputed
+ * against current policy.
+ */
+export async function fetchReceipt(
+  workspaceId: string,
+  receiptId: string,
+): Promise<ReceiptDetail | null> {
+  const response = await fetch(workspaceReceiptPath(workspaceId, receiptId), {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = receiptDetailResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.receipt : null;
+}
+
+/** Lists blocks, runtime- and plane-owned alike, newest first. */
+export async function fetchBlocks(
+  workspaceId: string,
+  options: { agentId?: string; source?: 'plane' | 'runtime'; cursor?: string } = {},
+): Promise<BlockListResponse> {
+  const params = new URLSearchParams();
+  if (options.agentId !== undefined && options.agentId !== '') {
+    params.set('agent_id', options.agentId);
+  }
+  if (options.source !== undefined) {
+    params.set('source', options.source);
+  }
+  if (options.cursor !== undefined && options.cursor !== '') {
+    params.set('cursor', options.cursor);
+  }
+
+  const query = params.toString();
+  const response = await fetch(
+    `${workspaceBlocksPath(workspaceId)}${query === '' ? '' : `?${query}`}`,
+    { credentials: 'include' },
+  );
+  if (!response.ok) {
+    throw new Error('Could not load blocks.');
+  }
+
+  const parsed = blockListResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data;
+}
+
+/** Fetches one block, including the quantity it refused. */
+export async function fetchBlock(
+  workspaceId: string,
+  blockId: string,
+): Promise<BlockDetail | null> {
+  const response = await fetch(workspaceBlockPath(workspaceId, blockId), {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = blockDetailResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.block : null;
 }
 
 /** Lists a workspace's API credentials. Safe metadata only - never a key. */

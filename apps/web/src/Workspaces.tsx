@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'reac
 import { Agents } from './Agents';
 import { createWorkspace, listWorkspaces, openWorkspace } from './api';
 import { ApiKeys } from './ApiKeys';
+import { Governance } from './Governance';
 import { Timeline } from './Timeline';
 
 /**
@@ -15,9 +16,9 @@ import { Timeline } from './Timeline';
  * localStorage, and even if it were, it would grant nothing: the server
  * re-proves membership on every request. Nothing the browser holds is trusted.
  *
- * STEP 11 SCOPE: create, list, open, and - once open - the agent roster, the
- * event timeline with raw drill-through, and API credentials. No policy, no
- * spend controls, no exports and no charts.
+ * SCOPE: create, list, open, and - once open - the agent roster with its
+ * enforcement state, the governance audit, the event timeline with raw
+ * drill-through, and API credentials. No exports, no charts, no rollups.
  */
 
 type LoadState =
@@ -149,7 +150,8 @@ export function Workspaces(): JSX.Element {
               {selected.role}.
             </p>
             <p className="mt-1 text-slate-500">
-              Agent policy is configurable below. Enforcement arrives in a later step.
+              Policy applies to actions that ask the control plane for a decision before acting.
+              Reported spend events are recorded, but do not draw down the daily ledger.
             </p>
           </div>
 
@@ -159,6 +161,10 @@ export function Workspaces(): JSX.Element {
               workspaceId={selected.id}
               canManagePolicy={selected.role === 'operator'}
             />
+          </div>
+
+          <div className="border-t border-slate-800 pt-5">
+            <Governance key={`governance-${selected.id}`} workspaceId={selected.id} />
           </div>
 
           <div className="border-t border-slate-800 pt-5">

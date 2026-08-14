@@ -1,18 +1,34 @@
-import type { AgentSummary } from '@hybrid/contracts';
+import type { AgentGovernance, AgentSummary } from '@hybrid/contracts';
 import { useEffect, useState, type JSX } from 'react';
 
 import { AgentPolicy } from './AgentPolicy';
 import { listAgents } from './api';
+import {
+  MODE_DESCRIPTION,
+  MODE_LABEL,
+  capsApply,
+  describePublishes,
+  describeSpend,
+} from './governance-format';
 
 /**
- * Workspace agent roster (AC-04).
+ * Workspace agent roster (AC-04) with fleet enforcement state (AC-07).
  *
  * READ-ONLY. Agents register themselves with an API key; the browser never
  * creates or modifies one, and there is no rename or delete control here.
  *
- * Deliberately absent: mode, caps, pause state, spend, and any gone-dark or
- * stale-agent alerting. Policy belongs to a later step, and gone-dark is the
- * deferred AC-14.
+ * ENFORCEMENT STATE IS SERVER-COMPUTED. Mode, caps and today's committed usage
+ * all arrive on the roster response, already resolved against effective policy
+ * and the authoritative daily ledger for the SERVER's UTC accounting day. This
+ * component formats them and nothing else - it does not sum events, does not
+ * compare a total to a cap, and does not decide what "today" means. A browser
+ * in UTC+13 must see the same day boundary the plane enforces against.
+ *
+ * WORDING IS FACTUAL. A cap being configured is not a guarantee that anything
+ * was stopped; nothing here says "protected" or "safe" on the strength of a
+ * number being set.
+ *
+ * Still deliberately absent: gone-dark and stale-agent alerting (AC-14).
  */
 
 interface AgentsProps {
@@ -50,6 +66,63 @@ function describeLastSeen(iso: string | null, now: number): string {
 
   const days = Math.floor(hours / 24);
   return `${String(days)} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** Mode pill. Paused is the only state given emphasis, because it stops work. */
+function ModeBadge({ mode }: { readonly mode: AgentGovernance['mode'] }): JSX.Element {
+  const tone =
+    mode === 'paused'
+      ? 'bg-amber-950 text-amber-300'
+      : mode === 'budgeted'
+        ? 'bg-sky-950 text-sky-300'
+        : 'bg-slate-800 text-slate-300';
+
+  return (
+    <span
+      className={`rounded px-1.5 py-0.5 text-xs font-medium ${tone}`}
+      title={MODE_DESCRIPTION[mode]}
+    >
+      {MODE_LABEL[mode]}
+    </span>
+  );
+}
+
+/**
+ * One agent's current enforcement state.
+ *
+ * Caps are shown only under `budgeted`. A leftover cap under `watch` is not
+ * applied to anything, and printing `$0.00 / $25.00` beside a watching agent
+ * would read as a budget being enforced when it is not.
+ *
+ * The accounting day is labelled UTC so a total that looks "wrong" late in the
+ * evening is explicable rather than alarming.
+ */
+function GovernanceSummary({
+  governance,
+}: {
+  readonly governance: AgentGovernance;
+}): JSX.Element {
+  return (
+    <div className="space-y-1 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <ModeBadge mode={governance.mode} />
+        <span className="text-slate-500">{MODE_DESCRIPTION[governance.mode]}</span>
+      </div>
+
+      {capsApply(governance.mode) && (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pt-1">
+          <dt className="text-slate-500">Today&rsquo;s spend</dt>
+          <dd className="font-mono text-slate-300">{describeSpend(governance)}</dd>
+          <dt className="text-slate-500">Publishes today</dt>
+          <dd className="font-mono text-slate-300">{describePublishes(governance)}</dd>
+        </dl>
+      )}
+
+      <p className="pt-0.5 text-slate-600">
+        Usage for {governance.accountingDay} (UTC), as recorded by the control plane.
+      </p>
+    </div>
+  );
 }
 
 export function Agents({ workspaceId, canManagePolicy }: AgentsProps): JSX.Element {
@@ -132,6 +205,10 @@ export function Agents({ workspaceId, canManagePolicy }: AgentsProps): JSX.Eleme
                   </button>
                 </span>
               </div>
+
+              {agent.governance !== undefined && (
+                <GovernanceSummary governance={agent.governance} />
+              )}
 
               {editing === agent.id && (
                 <AgentPolicy

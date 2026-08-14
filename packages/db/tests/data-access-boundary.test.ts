@@ -1196,10 +1196,18 @@ describe('mutation surface stays narrow and scoped', () => {
 
     // Each hardcodes its own source and neither accepts one as a parameter, so
     // no caller can fabricate enforcement authority the plane never exercised.
-    expect(plane).toContain("source: 'plane'");
-    expect(plane).not.toContain("source: 'runtime'");
-    expect(runtime).toContain("source: 'runtime'");
-    expect(runtime).not.toContain("source: 'plane'");
+    //
+    // Matched inside a `.values({...})` INSERT, not anywhere in the file: a
+    // type annotation like `source: 'plane' | 'runtime'` on a returned row is
+    // not an assignment, and flagging it would make the guard fail on an
+    // ordinary read projection.
+    const insertValues = (code: string): string =>
+      (code.match(/\.values\(\{[\s\S]*?\n\s*\}\)/g) ?? []).join('\n');
+
+    expect(insertValues(plane)).toContain("source: 'plane'");
+    expect(insertValues(plane)).not.toContain("source: 'runtime'");
+    expect(insertValues(runtime)).toContain("source: 'runtime'");
+    expect(insertValues(runtime)).not.toContain("source: 'plane'");
     for (const code of [plane, runtime]) {
       expect(code).not.toMatch(/source:\s*input\.|source:\s*\w*[Ss]ource\b/);
     }

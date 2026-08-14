@@ -168,10 +168,53 @@ describe('the accounting day is server authority', () => {
     return found;
   }
 
-  it('NO HTTP CONTRACT ACCEPTS A DAY FROM THE CALLER', () => {
+  /**
+   * Every schema that parses CALLER INPUT.
+   *
+   * By convention those are named `*RequestSchema` or `*QuerySchema`; the
+   * companion test below proves no other naming is used, so this cannot be
+   * evaded by calling a request schema something else.
+   */
+  function requestSchemaBlocks(): { file: string; block: string }[] {
+    const found: { file: string; block: string }[] = [];
+
+    for (const file of sourceFiles()) {
+      const code = readFileSync(file, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+
+      for (const match of code.matchAll(
+        /export const \w*(?:Request|Query)Schema =[\s\S]*?\n\}\)?;/g,
+      )) {
+        found.push({ file: path.relative(API_ROOT, file), block: match[0] });
+      }
+    }
+    return found;
+  }
+
+  it('NO REQUEST SCHEMA ACCEPTS A DAY FROM THE CALLER', () => {
     // A caller choosing their accounting day could charge today's overspend to
     // tomorrow, or replay yesterday's headroom. The day is derived server-side
     // from the injected clock and nowhere else.
+    //
+    // Scoped to REQUEST schemas: a response may legitimately report the day
+    // the server used - the fleet view does exactly that so an operator knows
+    // which day's usage they are looking at.
+    const blocks = requestSchemaBlocks();
+    expect(blocks.length).toBeGreaterThan(0);
+
+    const offenders = blocks
+      .filter(({ block }) =>
+        /\b(day|utc_day|utcDay|accounting_day|accountingDay)\s*:\s*z\./.test(block),
+      )
+      .map(({ file }) => file);
+
+    expect(offenders, 'no request schema may carry an accounting day').toEqual([]);
+  });
+
+  it('every caller-input schema follows the Request/Query naming convention', () => {
+    // Guards the guard above: a request schema named something else would
+    // escape the day check entirely.
     const offenders: string[] = [];
 
     for (const file of sourceFiles()) {
@@ -179,12 +222,16 @@ describe('the accounting day is server authority', () => {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/\/\/.*$/gm, '');
 
-      if (/\b(day|utc_day|utcDay|accounting_day|accountingDay)\s*:\s*z\./.test(code)) {
-        offenders.push(path.relative(API_ROOT, file));
+      for (const match of code.matchAll(/export const (\w+Schema) =/g)) {
+        const name = match[1] ?? '';
+        // Anything parsed from a caller must say so in its name.
+        if (/^(?:body|input|payload|params)/i.test(name)) {
+          offenders.push(`${path.relative(API_ROOT, file)}:${name}`);
+        }
       }
     }
 
-    expect(offenders, 'no request schema may carry an accounting day').toEqual([]);
+    expect(offenders).toEqual([]);
   });
 
   it('no route reads a day from request input', () => {

@@ -37,8 +37,15 @@ export type {
 } from './api-credentials.js';
 export type { AgentRepository, AgentRow } from './agents.js';
 
-export { createBlockRepository } from './blocks.js';
-export type { BlockRepository, BlockRow, ResolveRuntimeBlockInput } from './blocks.js';
+export { blockAuditQueries, createBlockRepository } from './blocks.js';
+export type {
+  AuditBlockRow,
+  BlockCursor,
+  BlockRepository,
+  BlockRow,
+  ListBlocksOptions,
+  ResolveRuntimeBlockInput,
+} from './blocks.js';
 
 export { createPlaneBlockRepository, planeBlockQueries } from './plane-blocks.js';
 export type { PlaneBlockInput, PlaneBlockRepository } from './plane-blocks.js';
@@ -86,7 +93,10 @@ export type {
 
 export { createPrecheckReceiptRepository, receiptQueries } from './receipts.js';
 export type {
+  AuditCursor,
+  AuditReceiptRow,
   InsertReceiptInput,
+  ListAuditOptions,
   PrecheckReceiptRepository,
   ReceiptRow,
 } from './receipts.js';

@@ -15,6 +15,7 @@ import type { ApiKeyStore } from '../api-keys/store.js';
 import type { Clock } from '../auth/clock.js';
 import { requireAuthenticatedUser } from '../auth/middleware.js';
 import type { AuthService } from '../auth/service.js';
+import type { GovernanceReadStore } from '../governance/read-store.js';
 import type { WorkspaceStore } from '../workspaces/store.js';
 
 /**
@@ -79,12 +80,15 @@ export interface AgentRouteOptions {
   readonly apiKeyStore: ApiKeyStore | undefined;
   readonly workspaceStore: WorkspaceStore | undefined;
   readonly authService: AuthService | undefined;
+  /** Step 17. Absent leaves the roster as bare agent metadata. */
+  readonly governanceReadStore?: GovernanceReadStore | undefined;
   readonly clock: Clock;
 }
 
 export function createAgentRoutes(options: AgentRouteOptions): Hono {
   const routes = new Hono();
-  const { agentStore, apiKeyStore, workspaceStore, authService, clock } = options;
+  const { agentStore, apiKeyStore, workspaceStore, authService, governanceReadStore, clock } =
+    options;
 
   /**
    * POST /v1/agents/register - machine registration and discovery.
@@ -172,7 +176,17 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
     return { ok: true, authorized };
   }
 
-  /** GET /v1/workspaces/:workspaceId/agents - the AC-04 roster. */
+  /**
+   * GET /v1/workspaces/:workspaceId/agents - the AC-04 roster.
+   *
+   * STEP 17: when the governance read store is wired, each agent also carries
+   * its EFFECTIVE policy and today's authoritative committed usage, so the
+   * operator can see enforcement state without a request per agent.
+   *
+   * The roster degrades to bare agent metadata when that store is absent,
+   * rather than failing: the registry is older than governance visibility and
+   * must not start depending on it.
+   */
   routes.get('/v1/workspaces/:workspaceId/agents', async (c) => {
     if (agentStore === undefined) {
       return c.json(UNAVAILABLE_BODY, SERVICE_UNAVAILABLE);
@@ -181,6 +195,22 @@ export function createAgentRoutes(options: AgentRouteOptions): Hono {
     const gate = await requireWorkspace(c);
     if (!gate.ok) {
       return gate.response;
+    }
+
+    if (governanceReadStore !== undefined) {
+      // SERVER time. The UTC accounting day derives from it, never from a
+      // browser clock - an operator in another zone must not be shown a
+      // different day's usage than the plane enforces against.
+      const fleet = await governanceReadStore.listFleet(gate.authorized, clock.now());
+
+      return c.json(
+        agentListResponseSchema.parse({
+          agents: fleet.map((entry) => ({
+            ...toSummary(entry.agent),
+            governance: entry.governance,
+          })),
+        }),
+      );
     }
 
     const agents = await agentStore.list(gate.authorized);

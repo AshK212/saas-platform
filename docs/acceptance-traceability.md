@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-14** (Step 16 — plane-owned blocks and denial atomicity).
+Last updated: **2026-08-14** (Step 17 — operator governance visibility).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -41,12 +41,12 @@ only and does not redefine any criterion.
 | AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
 | AC-05 | Timeline + agent filter | CREDIT — functional | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 implemented both halves.** `GET /v1/workspaces/:id/events` returns the workspace stream newest-first by server `received_at` with `id` as a deterministic tiebreaker, bounded pages (default 50, max 100) and opaque `(received_at, id)` cursor pagination that neither repeats nor skips rows. Per-agent filtering resolves the **external** `agent_id` inside the authorized workspace, so a shared `agent-1` cannot cross tenants; an unknown id returns an empty page rather than revealing existence. Browser-session auth only — an API key is refused. A functional operator UI lists events, filters by agent, and loads more. 66 route tests, 24 cursor tests, 25 compiled-SQL tests. **NOT PASS:** never demonstrated in an authorized environment, and the live PostgreSQL suite that proves real ordering, tiebreak and cursor behaviour is **SKIPPED**. |
 | AC-06 | Raw JSON event detail | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 completed the drill-through.** `GET /v1/workspaces/:id/events/:eventId` returns the event plus `raw` — the validated event object exactly as Step 10 stored it in `events.payload`, nested structure intact. `raw` is the **validated object, not raw HTTP request data**, which is why no credential or header material can appear in it. The UI renders it via `JSON.stringify(raw, null, 2)` in a `<pre>` as a React text child; a payload containing `<script>` displays as text and there is no `dangerouslySetInnerHTML` in the app. A malformed, unknown or foreign event id is uniformly 404. **NOT PASS:** never demonstrated in an authorized environment, and the live test asserting byte-for-byte `jsonb` round-tripping is **SKIPPED**. |
-| AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `IMPLEMENTED PARTIAL` | **All three halves now exist.** Step 13: an operator sets `budgeted` and a `$25.000000` cap in the UI. Step 14: the authoritative UTC-day ledger with exact micro-dollar arithmetic. **Step 15: `POST /v1/actions/precheck` compares the cap to committed usage and enforces it** — 20 allows, 5 more allows to exactly the cap, one more micro-dollar denies, each with a durable receipt. **NOT COMPLETE:** never demonstrated in an authorized environment, the live serialization suite is skipped, and the acceptance flow expects enforcement visible end to end with the block/receipt UI that arrives later. |
-| AC-08 | $41 over-cap denial + block/receipt | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both artifacts now exist.** $41 against a $25 cap denies with `daily_spend_cap_exceeded`, the ledger stays at 0, and one transaction commits a durable receipt (exact policy version, applied cap, requested amount, ledger-before, remaining) **and** a plane-owned block (`source = 'plane'`, `rule = daily_spend_cap`, requested amount, linked to that receipt). A failure in either half rolls the other back. A retry creates no second block. **NOT PASS:** never demonstrated in an authorized environment; the live suite proving real transactional atomicity is SKIPPED; and presentation of the block/receipt is Step 17. |
+| AC-07 | Budgeted + $25 daily spend cap in UI | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **All four halves now exist.** Step 13: an operator sets `budgeted` and a `$25.000000` cap in the UI. Step 14: the authoritative UTC-day ledger. Step 15: `POST /v1/actions/precheck` enforces the cap. **Step 17 closes the loop — the operator can now SEE it:** the agent roster reports mode, caps and today's committed usage as `Today's spend: $24.00 / $25.00`, read from `ledger_daily` for the **server's** UTC day, formatted from exact decimal strings with no `parseFloat`, no `toFixed` and no browser-side comparison of total to cap. Caps display only under `budgeted`, and no copy claims protection because a cap exists. **NOT PASS:** never demonstrated in an authorized environment, and the live suite proving real ledger reads, real UTC-day boundaries and that reading creates no row is **SKIPPED**. |
+| AC-08 | $41 over-cap denial + block/receipt | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both artifacts now exist.** $41 against a $25 cap denies with `daily_spend_cap_exceeded`, the ledger stays at 0, and one transaction commits a durable receipt (exact policy version, applied cap, requested amount, ledger-before, remaining) **and** a plane-owned block (`source = 'plane'`, `rule = daily_spend_cap`, requested amount, linked to that receipt). A failure in either half rolls the other back. A retry creates no second block. **NOT PASS:** never demonstrated in an authorized environment; the live suite proving real transactional atomicity is SKIPPED; and the operator presentation of the block and receipt now exists (Step 17) but has itself never run against a real database. |
 | AC-09 | Immediate block email | LATER | `DEFERRED` | Out of Credit phase. |
-| AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `IMPLEMENTED PARTIAL` | **Every mechanical piece now exists.** Raising a cap is atomic with a version bump (Step 13), does not reset committed spend (Step 14), propagates on the next ~30-second poll (Step 12), and the next precheck evaluates against the new cap and real retained usage (Step 15). **NOT COMPLETE:** the end-to-end flow — deny, raise, allow within 60 seconds — has never been exercised as one sequence, and requires a database and staging. |
-| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | Five prechecks allow and commit `+1` each with **no blocks**; the sixth denies with `daily_publish_cap_exceeded`, commits nothing, and records a receipt plus **exactly one** plane block (`rule = daily_publish_cap`, `count = 1`, spend column null). Six receipts, one block. Concurrent publishes serialize, so six simultaneous requests allow exactly five. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; presentation is Step 17. |
-| AC-12 | Pause next precheck denial + unpause | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **The full sequence works locally.** Setting `mode = paused` through the operator route creates **no block** — a policy change is not a denial. The next precheck, in **any** category including `other`, denies with reason `paused` and records a receipt plus a plane block (`rule = agent_paused`), with no ledger effect. Unpausing restores decisions on the next action and creates no further block. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; presentation is Step 17. |
+| AC-10 | Cap raised and next spend allowed within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Every mechanical piece exists, and the sequence is now observable.** Raising a cap is atomic with a version bump (Step 13), does not reset committed spend (Step 14), propagates on the next ~30-second poll (Step 12), and the next precheck evaluates against the new cap and real retained usage (Step 15). **Step 17 makes each stage visible:** the fleet view shows the new cap against unchanged committed usage, and the receipt list shows the denial and the subsequent allow as two records — the denial still explaining itself with the **old** cap, because a receipt is never recomputed. **NOT PASS:** the end-to-end flow has never been exercised as one timed sequence, which requires a database and staging. |
+| AC-11 | Publish cap 5/day, 6th denied | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | Five prechecks allow and commit `+1` each with **no blocks**; the sixth denies with `daily_publish_cap_exceeded`, commits nothing, and records a receipt plus **exactly one** plane block (`rule = daily_publish_cap`, `count = 1`, spend column null). Six receipts, one block. Concurrent publishes serialize, so six simultaneous requests allow exactly five. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; the operator presentation now exists (Step 17) but has itself never run against a real database. |
+| AC-12 | Pause next precheck denial + unpause | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **The full sequence works locally.** Setting `mode = paused` through the operator route creates **no block** — a policy change is not a denial. The next precheck, in **any** category including `other`, denies with reason `paused` and records a receipt plus a plane block (`rule = agent_paused`), with no ledger effect. Unpausing restores decisions on the next action and creates no further block. **NOT PASS:** never demonstrated in an authorized environment; live atomicity SKIPPED; the operator presentation now exists (Step 17) but has itself never run against a real database. |
 | AC-13 | Event replay idempotency | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 10 implemented ingest**, corrected after architecture review. `POST /v1/events` is mounted, bearer-authenticated, workspace derived from the credential row. One transaction per batch; the **duplicate decision precedes every one-time side effect**, serialized by a transaction-scoped `pg_advisory_xact_lock` keyed on `(workspace_id, event_id)` and acquired in deterministic order to avoid deadlock, with the Step 3 index `UNIQUE (workspace_id, event_id)` retained as defense in depth. Replaying a batch returns 200 with `accepted: 0, duplicates: N`; the stored count is unchanged, original rows untouched, `last_seen_at` not refreshed, and a replay carrying changed content creates no alternate block, agent or linkage. 92 in-process tests plus a real-socket run against the compiled build. **NOT PASS:** the live PostgreSQL suite — the only thing that can prove the advisory lock actually serializes, that a racing duplicate creates no alternate block or agent, that overlapping batches do not deadlock, and that cross-tenant isolation holds — is **SKIPPED**, gated on a `TEST_DATABASE_URL` that does not exist. |
 | AC-14 | Gone-dark | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-15 | 11:00 UTC digest | LATER | `DEFERRED` | Out of Credit phase. |
@@ -354,32 +354,78 @@ BLOCKED`** — every artifact those criteria name now exists and is atomic. They
 are not PASS: nothing has run against a real database, and their presentation is
 Step 17.
 
-## Summary at Step 16
+## Step 17 note: operator governance visibility
+
+Step 17 added no enforcement and no writes. It made what the plane already
+decides **visible**: fleet enforcement state on the agent roster, a receipt
+audit with full decision evidence, and a block audit distinguishing plane from
+runtime ownership.
+
+The invariant that matters is **no recomputation, at either layer**.
+
+- **The server never re-derives a past decision.** A receipt renders from
+  `applied_mode`, `applied_spend_cap_usd`, `applied_publish_cap`,
+  `ledger_spend_before_usd` and the persisted `deny_reason`. The route loads no
+  live policy and touches no ledger. Raising a cap this morning does not rewrite
+  yesterday's denial — which is exactly what makes AC-10's "deny, raise, allow"
+  sequence legible after the fact rather than retroactively erased.
+- **The browser never derives enforcement state.** No `parseFloat`, no
+  `toFixed`, no arithmetic, and no comparison of a committed total to a cap.
+  Money is formatted by string manipulation and truncated rather than rounded,
+  because a rounded-up total could read as a cap reached while the plane still
+  has headroom.
+
+Three further properties are worth recording:
+
+- **Reading creates nothing.** `findDailyLedger`, never `lockDailyLedger`.
+  Absent usage is zero computed at read time. An operator opening a dashboard
+  must not thereby acquire accounting rows for every idle agent, nor serialize
+  the fleet view against live enforcement.
+- **Usage comes from the ledger, never from events.** `spend.recorded` events
+  still do not debit the authoritative ledger (Step 19), so summing them would
+  show a number the plane does not enforce against, diverging silently.
+- **A runtime block carries no fabricated receipt.** Ownership is persisted, and
+  the UI states plainly that the control plane made no decision for a
+  runtime-reported block.
+
+**A mutation probe exposed a real coverage gap and it was closed.** Probe D
+(swap `findDailyLedger` for `lockDailyLedger`) was initially caught only by
+source guards: the route suite drives an in-memory store and never executes the
+Drizzle read store at all, and the compiled-SQL suite tests the queries rather
+than how the store composes them. A transcribed live test now executes that
+composition, with a drift guard in `apps/api` keeping the transcription honest.
+
+**AC-07 and AC-10 advance to `IMPLEMENTED / STAGING VERIFICATION BLOCKED`** —
+both were partial only because their acceptance is observed through an operator
+UI, and that UI now exists. Neither is PASS: nothing has run against a real
+database.
+
+## Summary at Step 17
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **9** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-08, AC-11, AC-12, AC-13)
-- `IMPLEMENTED PARTIAL`: **2** (AC-07, AC-10)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **11** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
+- `IMPLEMENTED PARTIAL`: **0**
 - `FOUNDATION` / `FOUNDATION ONLY`: **2** (AC-03, AC-20)
 - `BLOCKED`: **1** (AC-21)
 - `NOT STARTED`: **2** (AC-18, AC-19)
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-9 + 2 + 2 + 1 + 2 + 5 = 21.
+11 + 0 + 2 + 1 + 2 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
-Resend and Render. **Six** criteria are code-complete and waiting only on an
-authorized environment — that queue is the single largest risk to the delivery
-date, and it has grown at every step since Step 5.
+Resend and Render.
 
-**The enforcement work is essentially done.** AC-08, AC-11 and AC-12 have every
-artifact they name. AC-07 and AC-10 remain partial only because their acceptance
-is observed through an operator UI that does not exist yet (Step 17 for
-receipt/block presentation and today's spend against cap).
+**Every Credit-phase enforcement criterion is now code-complete.** AC-07, AC-08,
+AC-10, AC-11 and AC-12 each have every artifact they name, end to end from
+policy mutation through decision and denial to operator presentation. There is
+no longer a criterion in this group waiting on further implementation.
 
-**The environment risk has not narrowed at all, and it now dominates.** Eleven
-criteria are code-complete or partial and **none** has ever run against a real
-database. Every concurrency, atomicity and isolation guarantee in Steps 10–16 is
-argued and tested-but-unrun.
+**The environment risk is now the entire remaining risk, and it has not narrowed
+at any point.** Eleven criteria are code-complete and **none** has ever run
+against a real database. Every concurrency, atomicity, isolation and
+accounting-day guarantee in Steps 10–17 is argued and tested-but-unrun. The
+number of unverified criteria has grown at every step since Step 5; nothing in
+Step 17 changes that, and Step 17 adds 18 more skipped live tests to the queue.
 
 ## Step 3 note: relational foundation per criterion
 

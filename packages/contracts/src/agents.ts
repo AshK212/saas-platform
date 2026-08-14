@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { agentGovernanceSchema } from './governance.js';
+
 /**
  * Step 8 agent registry contracts.
  *
@@ -70,9 +72,15 @@ export type RegisterAgentResponse = z.infer<typeof registerAgentResponseSchema>;
 /**
  * Operator-facing agent metadata.
  *
- * No policy, mode, caps or pause state: those live in `agent_policies` and are
- * owned by a later step. Showing a mode here would mean inventing a default
- * policy just for the UI.
+ * STEP 17 added `governance`: the agent's EFFECTIVE mode and caps plus today's
+ * authoritative committed usage. It is optional on the wire so the single-agent
+ * lookup, which has no reason to load a ledger row, can omit it - a caller must
+ * check for it rather than assume it is always present.
+ *
+ * It is deliberately a nested object rather than flattened fields: mode, caps
+ * and usage are one coherent snapshot taken for one accounting day, and
+ * scattering them would invite reading a cap from one request and a total from
+ * another.
  */
 export const agentSummarySchema = z.object({
   /** Internal UUID. Distinct from the client-supplied `agentId`. */
@@ -83,6 +91,8 @@ export const agentSummarySchema = z.object({
   /** Null until the agent first makes contact. */
   lastSeenAt: z.string().nullable(),
   createdAt: z.string(),
+  /** Present on the roster; absent on the single-agent lookup. */
+  governance: agentGovernanceSchema.optional(),
 });
 
 export type AgentSummary = z.infer<typeof agentSummarySchema>;

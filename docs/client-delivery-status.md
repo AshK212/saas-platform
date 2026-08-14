@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 16 — plane-owned blocks and denial atomicity).
+Last updated: **2026-08-14** (Step 17 — operator governance visibility).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -146,16 +146,28 @@ confirmed against a real client-owned Neon project:
   either half leaves neither, with the ledger untouched. **AC-08, AC-11 and
   AC-12 all now hinge on that transactional atomicity, and it has never been
   observed.**
+- the **eighteen Step 17 live governance tests**, currently **skipped**. These
+  prove what the operator surface reports is actually what the database holds:
+  that a burst of decisions sharing one timestamp pages without repeating or
+  skipping a row, that another tenant's receipt and block are invisible by exact
+  uuid including through the joins, that `numeric(14,6)` hands back `24.999999`
+  as a string rather than a lossy double, and that **reading the fleet creates
+  no ledger row**. That last one cannot be tested any other way: an in-memory
+  store cannot fail to write a row it was never asked to write. A mutation probe
+  during Step 17 confirmed the gap was real, which is why this suite exists.
 
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Six criteria are now code-complete and blocked only on environment**
-(AC-01, AC-02, AC-04, AC-05, AC-06, AC-13). That queue grows with every step,
-and each addition increases the chance that the first real run against Neon
-surfaces several problems at once rather than one at a time. This is the primary
-schedule risk on the project.
+**Eleven criteria are now code-complete and blocked only on environment**
+(AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13) —
+every Credit-phase enforcement criterion among them. That queue has grown at
+every step since Step 5, and each addition increases the chance that the first
+real run against Neon surfaces several problems at once rather than one at a
+time. **This is now the entire remaining risk on the Credit phase**, and it is
+no longer offset by remaining implementation work: the enforcement path is
+finished end to end and has never executed against a real database.
 
 Local structural validation passes. That is **not** production Neon validation
 and is not reported as such.

@@ -9,8 +9,10 @@
 > is Step 19, and it is a different path from this one. A precheck *allow* does
 > debit, immediately and in the same transaction as its receipt.
 
-> **Receipt and block presentation is Step 17.** The artifacts are durable; no
-> operator UI reads them yet.
+> **Receipt and block presentation landed in Step 17.** See
+> [governance-visibility.md](governance-visibility.md). Those surfaces are
+> read-only and recompute nothing: a receipt always explains itself with the
+> policy that produced it.
 
 Sources: [`packages/contracts/src/precheck.ts`](../packages/contracts/src/precheck.ts) ·
 [`apps/api/src/precheck/decide.ts`](../apps/api/src/precheck/decide.ts) ·
@@ -413,10 +415,11 @@ configuring itself.
   audit event stream stays uncoupled — emitting one would risk a
   deny → block → event → block-ingest loop that nobody designed.
 - **No runtime block is ever rewritten** by a plane decision.
-- **No receipt or block read API, and no dashboard** — Step 17. The response
-  returns `precheck_id`, and the contract deliberately does **not** expose
-  `block_id`: widening the public surface now, when a later receipt-detail
-  endpoint will carry the linkage, would be change for its own sake.
+- **No receipt or block read API on the MACHINE surface.** The precheck response
+  returns `precheck_id` and deliberately does **not** expose `block_id`. The
+  Step 17 operator routes carry that linkage, and they are session-authenticated
+  only — a runtime that can be denied must not be able to read the whole
+  tenant's denial history.
 - **No `spend.recorded` ledger debit** — Step 19.
 - **No rate limiting.** Precheck is high-frequency and a valid key can abuse it.
   Carried as a production exposure risk; correctness first.

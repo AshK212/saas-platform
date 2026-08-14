@@ -9,6 +9,8 @@ import type { EventReadStore } from './events/read-store.js';
 import type { EventIngestStore } from './events/store.js';
 import { createAgentPolicyRoutes } from './routes/agent-policy.js';
 import { createAgentRoutes } from './routes/agents.js';
+import { createGovernanceRoutes } from './routes/governance.js';
+import type { GovernanceReadStore } from './governance/read-store.js';
 import { createEventRoutes } from './routes/events.js';
 import { createPolicyRoutes } from './routes/policy.js';
 import { createPrecheckRoutes } from './routes/precheck.js';
@@ -114,6 +116,15 @@ export interface AppDependencies {
    */
   readonly precheckStore?: PrecheckStore | undefined;
 
+  /**
+   * Operator governance visibility: fleet state, receipts and blocks.
+   *
+   * Read-only by construction - it holds no writer of any kind. `undefined`
+   * when the database is unconfigured, which leaves the agent roster as bare
+   * metadata and answers the audit routes with 503.
+   */
+  readonly governanceReadStore?: GovernanceReadStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -121,16 +132,18 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 15 SCOPE
+ * STEP 17 SCOPE
  * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
  * workspace API credentials, the agent registry, idempotent event INGEST, the
  * operator event TIMELINE and raw detail, machine policy POLLING, operator
- * policy MUTATION, and the PRECHECK decision engine with durable receipts.
+ * policy MUTATION, the PRECHECK decision engine with durable receipts and
+ * plane-owned blocks, and operator GOVERNANCE VISIBILITY - fleet enforcement
+ * state, receipt detail and block detail.
  *
- * Plane-owned blocks (Step 16), event-driven ledger debit (Step 19), exports,
- * rollups, sharing and demo are intentionally absent. Exactly one route writes
- * policy, and it requires a browser session and the `operator` role.
+ * Event-driven ledger debit (Step 19), email alerts, exports, rollups, sharing
+ * and demo are intentionally absent. Exactly one route writes policy, and it
+ * requires a browser session and the `operator` role.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -206,7 +219,16 @@ export function createApp(dependencies: AppDependencies): Hono {
       apiKeyStore: dependencies.apiKeyStore,
       workspaceStore: dependencies.workspaceStore,
       authService: dependencies.authService,
+      governanceReadStore: dependencies.governanceReadStore,
       clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createGovernanceRoutes({
+      governanceReadStore: dependencies.governanceReadStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
     }),
   );
   app.route(

@@ -1,7 +1,9 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 
 import { normalizeUsd } from '../accounting/money.js';
 import type { UtcAccountingDay } from '../accounting/utc-day.js';
+import { agents } from '../schema/agents.js';
+import { blocks } from '../schema/blocks.js';
 import { precheckReceipts } from '../schema/receipts.js';
 import type { DatabaseExecutor } from './executor.js';
 import type { WorkspaceScope } from './workspace-scope.js';
@@ -102,6 +104,48 @@ const RECEIPT_COLUMNS = {
   denyReason: precheckReceipts.denyReason,
 } as const;
 
+/**
+ * The projection the OPERATOR audit views share.
+ *
+ * Joins the agent for display and LEFT joins the plane block, so a list row
+ * can show "this denial produced a block" without a second query per row. The
+ * join condition repeats `workspace_id`, so it cannot pair a receipt with
+ * another tenant's block even if the outer predicate were dropped.
+ */
+const AUDIT_COLUMNS = {
+  ...RECEIPT_COLUMNS,
+  accountingDay: precheckReceipts.accountingDay,
+  ledgerSpendBeforeUsd: precheckReceipts.ledgerSpendBeforeUsd,
+  ledgerPublishBefore: precheckReceipts.ledgerPublishBefore,
+  createdAt: precheckReceipts.createdAt,
+  agentUuid: agents.id,
+  agentExternalId: agents.externalId,
+  agentDisplayName: agents.displayName,
+  blockUuid: blocks.id,
+  blockRule: blocks.rule,
+} as const;
+
+/** Applies the shared joins. Extracted so list and detail cannot diverge. */
+function auditSelect(executor: DatabaseExecutor) {
+  return executor
+    .select(AUDIT_COLUMNS)
+    .from(precheckReceipts)
+    .innerJoin(
+      agents,
+      and(
+        eq(agents.id, precheckReceipts.agentId),
+        eq(agents.workspaceId, precheckReceipts.workspaceId),
+      ),
+    )
+    .leftJoin(
+      blocks,
+      and(
+        eq(blocks.precheckReceiptId, precheckReceipts.id),
+        eq(blocks.workspaceId, precheckReceipts.workspaceId),
+      ),
+    );
+}
+
 export const receiptQueries = {
   /** Existence check used by event ingest to validate a `precheck_id`. */
   exists: (executor: DatabaseExecutor, scope: WorkspaceScope, receiptId: string) =>
@@ -123,7 +167,85 @@ export const receiptQueries = {
       .from(precheckReceipts)
       .where(and(receiptScopePredicate(scope), eq(precheckReceipts.actionId, actionId)))
       .limit(1),
+
+  /**
+   * One page of the workspace audit stream, newest first.
+   *
+   * ORDERING. `created_at DESC, id DESC`. The timestamp is server-assigned;
+   * `id` breaks ties, because a burst of decisions can share an instant and
+   * without a tiebreaker cursor pagination repeats or skips rows. Same
+   * convention as the event timeline.
+   *
+   * The agent filter takes an INTERNAL uuid the caller has already resolved
+   * inside this workspace.
+   */
+  listAudit: (
+    executor: DatabaseExecutor,
+    scope: WorkspaceScope,
+    options: {
+      readonly limit: number;
+      readonly agentId?: string | undefined;
+      readonly decision?: 'allow' | 'deny' | undefined;
+      readonly cursor?: { readonly createdAt: Date; readonly id: string } | undefined;
+    },
+  ) => {
+    const predicates: SQL[] = [receiptScopePredicate(scope)];
+    if (options.agentId !== undefined) {
+      predicates.push(eq(precheckReceipts.agentId, options.agentId));
+    }
+    if (options.decision !== undefined) {
+      predicates.push(eq(precheckReceipts.decision, options.decision));
+    }
+    if (options.cursor !== undefined) {
+      // Row-value comparison: exactly the ordering boundary, in one expression
+      // that cannot disagree with the ORDER BY. Both sides are bound
+      // parameters with explicit casts - nothing is concatenated into SQL.
+      predicates.push(
+        sql`(${precheckReceipts.createdAt}, ${precheckReceipts.id}) < (${options.cursor.createdAt}::timestamptz, ${options.cursor.id}::uuid)`,
+      );
+    }
+
+    return auditSelect(executor)
+      .where(and(...predicates))
+      .orderBy(desc(precheckReceipts.createdAt), desc(precheckReceipts.id))
+      .limit(options.limit);
+  },
+
+  /** One receipt with its display linkage, by internal uuid. */
+  findAuditById: (executor: DatabaseExecutor, scope: WorkspaceScope, receiptId: string) =>
+    auditSelect(executor)
+      .where(and(receiptScopePredicate(scope), eq(precheckReceipts.id, receiptId)))
+      .limit(1),
 } as const;
+
+/** A receipt as the operator audit views present it. */
+export interface AuditReceiptRow extends ReceiptRow {
+  readonly accountingDay: string | null;
+  readonly ledgerSpendBeforeUsd: string | null;
+  readonly ledgerPublishBefore: number | null;
+  readonly createdAt: Date;
+  readonly agent: {
+    readonly id: string;
+    readonly externalId: string;
+    readonly displayName: string | null;
+  };
+  /** The plane block this denial produced, if any. */
+  readonly block: { readonly id: string; readonly rule: string } | null;
+}
+
+/** The ordering boundary an audit page resumes from. */
+export interface AuditCursor {
+  readonly createdAt: Date;
+  readonly id: string;
+}
+
+export interface ListAuditOptions {
+  readonly limit: number;
+  /** INTERNAL agent uuid, already resolved inside this workspace. */
+  readonly agentId?: string | undefined;
+  readonly decision?: 'allow' | 'deny' | undefined;
+  readonly cursor?: AuditCursor | undefined;
+}
 
 export interface PrecheckReceiptRepository {
   /**
@@ -150,6 +272,17 @@ export interface PrecheckReceiptRepository {
    * without a receipt would be unexplainable money.
    */
   insert(input: InsertReceiptInput): Promise<ReceiptRow>;
+
+  /** One page of the audit stream, newest first. Read-only. */
+  listAudit(options: ListAuditOptions): Promise<AuditReceiptRow[]>;
+
+  /**
+   * One receipt with full persisted evidence.
+   *
+   * @returns null when the receipt is not in this workspace - indistinguishable
+   *   from one that does not exist.
+   */
+  findAuditById(receiptId: string): Promise<AuditReceiptRow | null>;
 }
 
 /** Normalises a raw row so driver numeric behaviour never escapes this module. */
@@ -179,6 +312,55 @@ function toReceiptRow(row: {
       row.requestedAmountUsd === null ? null : normalizeUsd(row.requestedAmountUsd),
     remainingSpendUsd:
       row.remainingSpendUsd === null ? null : normalizeUsd(row.remainingSpendUsd),
+  };
+}
+
+/** Flattens the joined audit projection into the nested display shape. */
+function toAuditRow(row: {
+  accountingDay: string | null;
+  ledgerSpendBeforeUsd: string | null;
+  ledgerPublishBefore: number | null;
+  createdAt: Date;
+  agentUuid: string;
+  agentExternalId: string;
+  agentDisplayName: string | null;
+  blockUuid: string | null;
+  blockRule: string | null;
+  id: string;
+  actionId: string;
+  agentId: string;
+  category: InsertReceiptInput['category'];
+  decision: 'allow' | 'deny';
+  policyVersion: string;
+  appliedMode: InsertReceiptInput['appliedMode'];
+  appliedSpendCapUsd: string | null;
+  appliedPublishCap: number | null;
+  requestedAmountUsd: string | null;
+  requestedPublishCount: number | null;
+  remainingSpendUsd: string | null;
+  remainingPublishCount: number | null;
+  denyReason: string | null;
+}): AuditReceiptRow {
+  return {
+    ...toReceiptRow(row),
+    accountingDay: row.accountingDay,
+    // Canonical six-decimal form, so evidence read back never differs in shape
+    // from what the decision reported at the time.
+    ledgerSpendBeforeUsd:
+      row.ledgerSpendBeforeUsd === null ? null : normalizeUsd(row.ledgerSpendBeforeUsd),
+    ledgerPublishBefore: row.ledgerPublishBefore,
+    createdAt: row.createdAt,
+    agent: {
+      id: row.agentUuid,
+      externalId: row.agentExternalId,
+      displayName: row.agentDisplayName,
+    },
+    // The left join produced no block: an allow, or a denial from before
+    // plane blocks existed.
+    block:
+      row.blockUuid === null || row.blockRule === null
+        ? null
+        : { id: row.blockUuid, rule: row.blockRule },
   };
 }
 
@@ -230,6 +412,17 @@ export function createPrecheckReceiptRepository(
         throw new Error('Failed to record the precheck receipt.');
       }
       return toReceiptRow(row);
+    },
+
+    async listAudit(options: ListAuditOptions): Promise<AuditReceiptRow[]> {
+      const rows = await receiptQueries.listAudit(executor, scope, options);
+      return rows.map(toAuditRow);
+    },
+
+    async findAuditById(receiptId: string): Promise<AuditReceiptRow | null> {
+      const rows = await receiptQueries.findAuditById(executor, scope, receiptId);
+      const row = rows[0];
+      return row === undefined ? null : toAuditRow(row);
     },
   };
 }

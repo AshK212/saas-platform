@@ -845,19 +845,35 @@ describe('no other surface', () => {
     expect(response.status).toBe(404);
   });
 
-  it('exposes no receipt read route', async () => {
+  it('exposes no receipt read route on the MACHINE surface', async () => {
     const t = await tenant('op@example.test', 'Acme');
     await decide(t.key, { action_id: 'act-1', agent_id: 'agent-a', category: 'other' });
     const receiptId = precheck.receipts[0]?.id ?? '';
 
-    // Receipt presentation is a later step.
-    for (const path of [
-      `/v1/receipts/${receiptId}`,
-      `/v1/workspaces/${t.workspaceId}/receipts`,
-      `${PRECHECK_PATH}/${receiptId}`,
-    ]) {
+    // Step 17 added an OPERATOR audit surface under
+    // /v1/workspaces/:id/receipts, reachable only with a session cookie. The
+    // precheck path itself gained nothing, and there is no unscoped route.
+    for (const path of [`/v1/receipts/${receiptId}`, `${PRECHECK_PATH}/${receiptId}`]) {
       const response = await app.request(path, { headers: { cookie: t.cookie } });
       expect(response.status, path).toBe(404);
+    }
+  });
+
+  it('an API key cannot read the operator audit surface', async () => {
+    const t = await tenant('op@example.test', 'Acme');
+
+    for (const path of [
+      `/v1/workspaces/${t.workspaceId}/receipts`,
+      `/v1/workspaces/${t.workspaceId}/blocks`,
+    ]) {
+      const response = await app.request(path, {
+        headers: { authorization: `Bearer ${t.key}` },
+      });
+      // No governance store wired here, so the route reports unavailable
+      // rather than authenticating a machine credential. The dedicated 401
+      // assertion lives in governance-routes.test.ts, where it IS wired.
+      expect([401, 503], path).toContain(response.status);
+      expect(response.status, path).not.toBe(200);
     }
   });
 });
