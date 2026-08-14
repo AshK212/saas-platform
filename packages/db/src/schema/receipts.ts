@@ -56,6 +56,19 @@ export const precheckReceipts = pgTable(
       .references(() => workspaces.id, { onDelete: 'restrict' }),
     agentId: uuid('agent_id').notNull(),
 
+    /**
+     * The runtime's own identifier for the action being prechecked.
+     *
+     * THE IDEMPOTENCY KEY. Client-supplied and unique only within a workspace,
+     * exactly like `events.event_id`. It is NOT tenant authority and NOT the
+     * receipt id - the plane generates `id` and returns that as `precheck_id`.
+     *
+     * Added in Step 15: the Step 3 schema omitted it, but the locked precheck
+     * contract carries `action_id`, and silently dropping a contract identity
+     * would make retries unsafe. See the unique constraint below.
+     */
+    actionId: text('action_id').notNull(),
+
     category: actionCategory('category').notNull(),
 
     /** What was asked for. Both nullable: a request is spend, publish, or neither. */
@@ -89,6 +102,21 @@ export const precheckReceipts = pgTable(
   (table) => [
     // Target of the composite foreign keys from blocks and events.
     unique('precheck_receipts_workspace_id_id_key').on(table.workspaceId, table.id),
+
+    /**
+     * THE PRECHECK IDEMPOTENCY BOUNDARY.
+     *
+     * A network retry of an ALLOWED spend must not debit the ledger twice.
+     * Commit-on-allow makes that a real money defect, not a cosmetic one, so
+     * the database - not application discipline - enforces one receipt per
+     * `(workspace_id, action_id)`.
+     *
+     * Composite, because `action_id` is client-supplied and two tenants may
+     * legitimately both use `act-1`.
+     */
+    unique('precheck_receipts_workspace_action_id_key').on(table.workspaceId, table.actionId),
+
+    check('precheck_receipts_action_id_nonempty_check', sql`length(${table.actionId}) > 0`),
     foreignKey({
       name: 'precheck_receipts_workspace_agent_fkey',
       columns: [table.workspaceId, table.agentId],

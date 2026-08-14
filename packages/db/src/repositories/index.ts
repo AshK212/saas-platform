@@ -54,9 +54,13 @@ export type {
 export { createLedgerRepository, ledgerQueries, ledgerScopePredicate, LedgerRowMissingError } from './ledger.js';
 export type { DailyLedgerState, LedgerRepository, LockedDailyLedger } from './ledger.js';
 
-export { createIngestLockRepository } from './ingest-locks.js';
-export type { EventLockRequest, IngestLockRepository } from './ingest-locks.js';
-export { compareLockKeys, eventIngestLockKey } from './lock-keys.js';
+export { createIngestLockRepository, createPrecheckLockRepository } from './ingest-locks.js';
+export type {
+  EventLockRequest,
+  IngestLockRepository,
+  PrecheckLockRepository,
+} from './ingest-locks.js';
+export { compareLockKeys, eventIngestLockKey, precheckActionLockKey } from './lock-keys.js';
 
 export {
   agentPolicyScopePredicate,
@@ -64,7 +68,11 @@ export {
   policyQueries,
   policyStateScopePredicate,
 } from './policy.js';
-export type { EffectiveAgentPolicyRow, PolicyReadRepository } from './policy.js';
+export type {
+  EffectiveAgentPolicyRow,
+  EffectivePolicyForDecision,
+  PolicyReadRepository,
+} from './policy.js';
 
 export { createPolicyMutationService, MissingPolicyStateError } from './policy-mutation.js';
 export type {
@@ -73,8 +81,12 @@ export type {
   PolicyMutationService,
 } from './policy-mutation.js';
 
-export { createPrecheckReceiptRepository } from './receipts.js';
-export type { PrecheckReceiptRepository } from './receipts.js';
+export { createPrecheckReceiptRepository, receiptQueries } from './receipts.js';
+export type {
+  InsertReceiptInput,
+  PrecheckReceiptRepository,
+  ReceiptRow,
+} from './receipts.js';
 
 export {
   createRuntimeProfileRepository,

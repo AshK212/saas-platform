@@ -626,6 +626,9 @@ describe.skipIf(!hasTestDatabase)('live event ingest', () => {
             .insert(precheckReceipts)
             .values({
               workspaceId,
+              // Step 15 added `action_id` as the precheck idempotency key.
+              // Unique per workspace, so both tenants may use the same text.
+              actionId: `seed-${workspaceId}`,
               agentId: agent?.id ?? '',
               category: 'publish',
               decision: 'allow',

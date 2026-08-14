@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from './executor.js';
-import { compareLockKeys, eventIngestLockKey } from './lock-keys.js';
+import { compareLockKeys, eventIngestLockKey, precheckActionLockKey } from './lock-keys.js';
 import type { WorkspaceScope } from './workspace-scope.js';
 
 /**
@@ -44,6 +44,32 @@ import type { WorkspaceScope } from './workspace-scope.js';
 export interface EventLockRequest {
   readonly eventId: string;
   readonly lockKey: bigint;
+}
+
+export interface PrecheckLockRepository {
+  /**
+   * Serializes concurrent requests carrying the same precheck action identity.
+   *
+   * THE FIRST LOCK a decision takes - see the global lock order in
+   * docs/precheck.md. Two simultaneous retries of one action both block here,
+   * so only one can reach the decision and the other finds the committed
+   * receipt waiting.
+   */
+  lockAction(actionId: string): Promise<void>;
+}
+
+export function createPrecheckLockRepository(
+  executor: DatabaseExecutor,
+  scope: WorkspaceScope,
+): PrecheckLockRepository {
+  return {
+    async lockAction(actionId: string): Promise<void> {
+      // Workspace from the SCOPE, so a caller cannot aim a lock at another
+      // tenant's key space.
+      const key = precheckActionLockKey(scope.workspaceId, actionId);
+      await executor.execute(sql`select pg_advisory_xact_lock(${key})`);
+    },
+  };
 }
 
 export interface IngestLockRepository {

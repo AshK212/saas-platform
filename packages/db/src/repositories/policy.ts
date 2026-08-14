@@ -69,6 +69,50 @@ export const policyQueries = {
       .limit(1),
 
   /**
+   * The version, read under a SHARED lock for decision consistency.
+   *
+   * WHY `FOR SHARE` AND NOT `FOR UPDATE`
+   * ------------------------------------
+   * A precheck must evaluate against one internally consistent
+   * `(version, policy)` pair: if an operator's mutation landed between reading
+   * the version and reading the caps, the receipt would cite a version that
+   * never produced the decision it records.
+   *
+   * `FOR SHARE` blocks the policy MUTATION path - which takes `FOR UPDATE` -
+   * for the life of the deciding transaction, while letting concurrent
+   * prechecks proceed together. `FOR UPDATE` here would serialize every
+   * precheck in a workspace against every other, which for a per-action call
+   * would be a severe and unnecessary throughput cost.
+   */
+  lockVersionForShare: (executor: DatabaseExecutor, scope: WorkspaceScope) =>
+    executor
+      .select({ version: sql<string>`${workspacePolicyState.version}::text` })
+      .from(workspacePolicyState)
+      .where(policyStateScopePredicate(scope))
+      .for('share')
+      .limit(1),
+
+  /**
+   * One agent's explicit policy, if any. Used by the decision path, which
+   * needs a single agent rather than the whole roster.
+   */
+  findAgentPolicy: (executor: DatabaseExecutor, scope: WorkspaceScope, agentId: string) =>
+    executor
+      .select({
+        mode: agentPolicies.mode,
+        dailySpendCapUsd: agentPolicies.dailySpendCapUsd,
+        dailyPublishCap: agentPolicies.dailyPublishCap,
+      })
+      .from(agentPolicies)
+      .where(
+        and(
+          eq(agentPolicies.workspaceId, scope.workspaceId),
+          eq(agentPolicies.agentId, agentId),
+        ),
+      )
+      .limit(1),
+
+  /**
    * Every agent in the workspace with its explicit policy, if any.
    *
    * LEFT JOIN FROM AGENTS, NOT FROM POLICIES. An agent may exist with no policy
@@ -106,6 +150,17 @@ export const policyQueries = {
       .orderBy(asc(agents.externalId)),
 } as const;
 
+/** One agent's effective policy, resolved for a decision. */
+export interface EffectivePolicyForDecision {
+  /** The exact workspace policy version this snapshot belongs to. */
+  readonly version: string;
+  readonly mode: 'watch' | 'budgeted' | 'paused';
+  readonly dailySpendCapUsd: string | null;
+  readonly dailyPublishCap: number | null;
+  /** False when the defaults were applied because no explicit row exists. */
+  readonly hasExplicitPolicy: boolean;
+}
+
 export interface PolicyReadRepository {
   /**
    * The workspace policy version as an exact decimal string.
@@ -119,6 +174,23 @@ export interface PolicyReadRepository {
 
   /** Every agent with its effective policy. Empty only if the workspace has no agents. */
   listEffectivePolicies(): Promise<EffectiveAgentPolicyRow[]>;
+
+  /**
+   * One CONSISTENT policy snapshot for a decision, under a shared lock.
+   *
+   * The version and the caps are read in the same transaction with the version
+   * row locked `FOR SHARE`, so an operator mutation cannot land between them.
+   * The receipt can therefore cite a version that genuinely produced the
+   * decision.
+   *
+   * Applies the Step 12 defaults when no explicit row exists, and creates
+   * nothing - governance state is operator-owned, and a precheck that wrote a
+   * policy row would be an agent configuring itself.
+   *
+   * @returns null when the workspace has no policy state, which is a
+   *   provisioning invariant violation rather than an empty policy.
+   */
+  lockPolicyForDecision(agentId: string): Promise<EffectivePolicyForDecision | null>;
 }
 
 export function createPolicyReadRepository(
@@ -129,6 +201,41 @@ export function createPolicyReadRepository(
     async findVersion(): Promise<string | null> {
       const rows = await policyQueries.findVersion(executor, scope);
       return rows[0]?.version ?? null;
+    },
+
+    async lockPolicyForDecision(agentId: string): Promise<EffectivePolicyForDecision | null> {
+      // 1. Lock the version row FOR SHARE. This is the FIRST lock a decision
+      //    takes - see the documented global lock order in docs/precheck.md.
+      const versions = await policyQueries.lockVersionForShare(executor, scope);
+      const version = versions[0]?.version;
+      if (version === undefined) {
+        return null;
+      }
+
+      // 2. Read the agent's policy inside the same lock, so the version above
+      //    is guaranteed to be the one these values belong to.
+      const rows = await policyQueries.findAgentPolicy(executor, scope, agentId);
+      const explicit = rows[0];
+
+      if (explicit === undefined) {
+        // Step 12 defaults: observe and record, enforce nothing. Computed,
+        // never persisted.
+        return {
+          version,
+          mode: 'watch',
+          dailySpendCapUsd: null,
+          dailyPublishCap: null,
+          hasExplicitPolicy: false,
+        };
+      }
+
+      return {
+        version,
+        mode: explicit.mode,
+        dailySpendCapUsd: explicit.dailySpendCapUsd,
+        dailyPublishCap: explicit.dailyPublishCap,
+        hasExplicitPolicy: true,
+      };
     },
 
     async listEffectivePolicies(): Promise<EffectiveAgentPolicyRow[]> {

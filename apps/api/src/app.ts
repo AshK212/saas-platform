@@ -11,6 +11,8 @@ import { createAgentPolicyRoutes } from './routes/agent-policy.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createEventRoutes } from './routes/events.js';
 import { createPolicyRoutes } from './routes/policy.js';
+import { createPrecheckRoutes } from './routes/precheck.js';
+import type { PrecheckStore } from './precheck/store.js';
 import { createTimelineRoutes } from './routes/timeline.js';
 import type { PolicyMutationStore } from './policy/mutation-store.js';
 import type { PolicyStore } from './policy/store.js';
@@ -105,6 +107,13 @@ export interface AppDependencies {
    */
   readonly policyMutationStore?: PolicyMutationStore | undefined;
 
+  /**
+   * The precheck decision engine. `undefined` when the database is
+   * unconfigured - `POST /v1/actions/precheck` then answers 503 while liveness
+   * stays unaffected.
+   */
+  readonly precheckStore?: PrecheckStore | undefined;
+
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
 }
@@ -112,16 +121,16 @@ export interface AppDependencies {
 /**
  * Composes the control-plane API.
  *
- * STEP 13 SCOPE
+ * STEP 15 SCOPE
  * -------------
  * Liveness, readiness, authentication, workspace membership authorization,
  * workspace API credentials, the agent registry, idempotent event INGEST, the
- * operator event TIMELINE and raw detail, machine policy POLLING, and operator
- * policy MUTATION.
+ * operator event TIMELINE and raw detail, machine policy POLLING, operator
+ * policy MUTATION, and the PRECHECK decision engine with durable receipts.
  *
- * Prechecks, the ledger, receipts, enforcement of any kind, exports, rollups,
- * sharing and demo are intentionally absent. Exactly one route writes policy,
- * and it requires a browser session and the `operator` role.
+ * Plane-owned blocks (Step 16), event-driven ledger debit (Step 19), exports,
+ * rollups, sharing and demo are intentionally absent. Exactly one route writes
+ * policy, and it requires a browser session and the `operator` role.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -212,6 +221,14 @@ export function createApp(dependencies: AppDependencies): Hono {
     '/',
     createPolicyRoutes({
       policyStore: dependencies.policyStore,
+      apiKeyStore: dependencies.apiKeyStore,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createPrecheckRoutes({
+      precheckStore: dependencies.precheckStore,
       apiKeyStore: dependencies.apiKeyStore,
       clock: dependencies.clock ?? systemClock,
     }),

@@ -32,6 +32,15 @@ import { createHash } from 'node:crypto';
 /** Domain tag, so these keys can never collide with a future lock family. */
 const EVENT_INGEST_DOMAIN = 'hybrid:event-ingest:v1';
 
+/**
+ * Domain tag for precheck action identity.
+ *
+ * Distinct from the ingest domain so an `event_id` and an `action_id` that
+ * happen to share text never share a lock - they are unrelated identities and
+ * serializing them together would be a silent throughput bug.
+ */
+const PRECHECK_ACTION_DOMAIN = 'hybrid:precheck-action:v1';
+
 const TWO_POW_64 = 1n << 64n;
 const TWO_POW_63 = 1n << 63n;
 
@@ -46,6 +55,22 @@ const TWO_POW_63 = 1n << 63n;
 export function eventIngestLockKey(workspaceId: string, eventId: string): bigint {
   const digest = createHash('sha256')
     .update(`${EVENT_INGEST_DOMAIN}\0${workspaceId}\0${eventId}`, 'utf8')
+    .digest();
+
+  const unsigned = digest.readBigUInt64BE(0);
+  return unsigned >= TWO_POW_63 ? unsigned - TWO_POW_64 : unsigned;
+}
+
+/**
+ * The advisory-lock key for one precheck action identity.
+ *
+ * Serializes two concurrent requests carrying the same `action_id`, so a
+ * network retry cannot decide twice and debit twice. Same derivation and same
+ * guarantees as `eventIngestLockKey`, under a different domain tag.
+ */
+export function precheckActionLockKey(workspaceId: string, actionId: string): bigint {
+  const digest = createHash('sha256')
+    .update(`${PRECHECK_ACTION_DOMAIN}\0${workspaceId}\0${actionId}`, 'utf8')
     .digest();
 
   const unsigned = digest.readBigUInt64BE(0);

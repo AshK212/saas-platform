@@ -64,6 +64,23 @@ export type {
   ValidationIssue,
 } from './events.js';
 export {
+  precheckDecisionSchema,
+  precheckDenyReasonSchema,
+  precheckErrorSchema,
+  precheckRemainingSchema,
+  precheckRequestSchema,
+  precheckResponseSchema,
+  PRECHECK_PATH,
+} from './precheck.js';
+export type {
+  PrecheckDecision,
+  PrecheckDenyReason,
+  PrecheckError,
+  PrecheckRemaining,
+  PrecheckRequest,
+  PrecheckResponse,
+} from './precheck.js';
+export {
   agentPolicyErrorSchema,
   agentPolicyMutationRequestSchema,
   agentPolicyPath,

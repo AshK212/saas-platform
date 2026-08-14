@@ -87,14 +87,40 @@ describe('no per-key permission surface exists', () => {
     }
   });
 
-  it('no precheck, ledger or receipt contract has been added yet', () => {
+  it('no ledger or receipt-dashboard contract has been added yet', () => {
     // `agents.ts` arrived in Step 8, `events.ts` in Step 9, `timeline.ts` in
-    // Step 11 and `policy.ts` in Step 12. These three belong to later steps.
+    // Step 11, `policy.ts` in Step 12 and `precheck.ts` in Step 15. The ledger
+    // has no wire surface at all, and receipt presentation is a later step.
     const files = readdirSync(CONTRACTS_SRC);
 
-    expect(files).not.toContain('precheck.ts');
     expect(files).not.toContain('ledger.ts');
     expect(files).not.toContain('receipts.ts');
+  });
+
+  it('the precheck contract accepts no tenant or policy authority', () => {
+    const source = readFileSync(path.join(CONTRACTS_SRC, 'precheck.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // A caller states what it wants to do; the plane decides. Scoped to the
+    // REQUEST schema: the response legitimately names caps in its deny-reason
+    // vocabulary (`daily_spend_cap_exceeded`), which is not caller authority.
+    const request = /export const precheckRequestSchema =[\s\S]*?\n {2}\}\)/.exec(code);
+    expect(request).not.toBeNull();
+    const requestBlock = request?.[0] ?? '';
+
+    for (const forbidden of [
+      'workspace_id',
+      'workspaceId',
+      'tenant_id',
+      'policy_version',
+      'mode',
+      'cap',
+      'precheck_id',
+      'decision',
+    ]) {
+      expect(requestBlock, forbidden).not.toContain(forbidden);
+    }
+    expect(code).toContain('z.strictObject');
   });
 
   it('the policy contract is READ-ONLY - no mutation shape exists', () => {

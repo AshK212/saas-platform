@@ -245,7 +245,7 @@ describe('repository factories require a workspace scope', () => {
 
 describe('every repository source file scopes its queries', () => {
   /** Files whose every statement is a read. */
-  const READ_ONLY_FILES = ['policy.ts', 'receipts.ts', 'runtime-profiles.ts'];
+  const READ_ONLY_FILES = ['runtime-profiles.ts'];
 
   /**
    * Files that also perform SCOPED writes.
@@ -262,7 +262,16 @@ describe('every repository source file scopes its queries', () => {
     'events.ts',
     'ledger.ts',
     'policy-mutation.ts',
+    'receipts.ts',
   ];
+
+  /**
+   * `policy.ts` reads only, but its selects are no longer all shaped the same:
+   * `findAgentPolicy` filters `agent_policies`, not `workspace_policy_state`,
+   * so a single named predicate cannot cover every query in the file. Its
+   * scoping is asserted individually below and in the compiled-SQL suite.
+   */
+  const READ_ONLY_UNCOUNTED_FILES = ['policy.ts'];
 
   /**
    * Files in `repositories/` that hold no query at all, and why.
@@ -278,7 +287,26 @@ describe('every repository source file scopes its queries', () => {
    */
   const NON_QUERY_FILES = ['executor.ts', 'index.ts', 'ingest-locks.ts', 'lock-keys.ts', 'workspace-scope.ts'];
 
-  const REPOSITORY_FILES = [...READ_ONLY_FILES, ...WRITING_FILES];
+  const REPOSITORY_FILES = [
+    ...READ_ONLY_FILES,
+    ...READ_ONLY_UNCOUNTED_FILES,
+    ...WRITING_FILES,
+  ];
+
+  it.each(READ_ONLY_UNCOUNTED_FILES)('%s performs no writes and scopes every select', (fileName) => {
+    const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
+
+    expect(source, fileName).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+    // Every select carries a workspace predicate, on whichever table it reads.
+    const selectCount = (source.match(/\.select\(/g) ?? []).length;
+    const scopedCount = (
+      source.match(/ScopePredicate\(scope\)|workspaceId, scope\.workspaceId/g) ?? []
+    ).length;
+    expect(selectCount).toBeGreaterThan(0);
+    expect(scopedCount, `${fileName}: ${String(selectCount)} selects`).toBeGreaterThanOrEqual(
+      selectCount,
+    );
+  });
 
   it('every file in repositories/ is classified', () => {
     const onDisk = readdirSync(path.join(PACKAGE_ROOT, 'src', 'repositories'))
@@ -488,7 +516,7 @@ describe('destructive live tests cannot target production', () => {
 });
 
 describe('mutation surface stays narrow and scoped', () => {
-  it.each(['receipts.ts', 'runtime-profiles.ts'])('%s performs no writes', (fileName) => {
+  it.each(['runtime-profiles.ts'])('%s performs no writes', (fileName) => {
     const source = readFileSync(path.join(PACKAGE_ROOT, 'src', 'repositories', fileName), 'utf8');
 
     expect(source, fileName).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
@@ -930,17 +958,145 @@ describe('mutation surface stays narrow and scoped', () => {
     expect(code).not.toMatch(/Number\(|parseInt\(/);
   });
 
-  it('the receipt repository can only test existence', () => {
+  it('RECEIPTS ARE IMMUTABLE: insert only, never update or delete', () => {
     const source = readFileSync(
       path.join(PACKAGE_ROOT, 'src', 'repositories', 'receipts.ts'),
       'utf8',
     );
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
-    // Ingest must be able to VERIFY a precheck receipt, never to create one -
-    // a self-issued receipt would be an approval an agent granted itself.
-    expect(code).not.toMatch(/\.insert\(|\.update\(|\.delete\(/);
+    // A receipt explains a decision that was already made. Altering one would
+    // destroy the only record of what the plane actually did, and a "latest
+    // receipt" that could be overwritten would be worthless as evidence.
+    expect(code).toContain('.insert(precheckReceipts)');
+    expect(code).not.toMatch(/\.update\(/);
+    expect(code).not.toMatch(/\.delete\(/);
+    expect(code).not.toMatch(/onConflictDoUpdate/);
     expect(code).toContain('receiptScopePredicate(scope)');
+  });
+
+  it('the receipt insert takes its workspace from the scope', () => {
+    const source = readFileSync(
+      path.join(PACKAGE_ROOT, 'src', 'repositories', 'receipts.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).toContain('workspaceId: scope.workspaceId');
+    expect(code).not.toMatch(/workspaceId:\s*input\./);
+    // The policy version reaches `bigint` as exact text, never a JS number.
+    expect(code).toContain('::bigint');
+    expect(code).not.toMatch(/Number\(|parseInt\(/);
+  });
+
+  it('EVERY DECISION PATH RECORDS A RECEIPT IN THE SAME TRANSACTION', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // COMMIT-ON-ALLOW. One transaction wraps the whole decision, so a failed
+    // receipt insert rolls the debit back and a failed debit prevents the
+    // receipt. There is exactly one `db.transaction(` and exactly one
+    // `receipts.insert(`, reached on every path that decides.
+    expect((code.match(/db\.transaction\(/g) ?? []).length).toBe(1);
+    expect((code.match(/receipts\.insert\(/g) ?? []).length).toBe(1);
+    // The debit happens strictly before the receipt, inside that transaction.
+    expect(code.indexOf('locked.commitSpend(')).toBeLessThan(code.indexOf('receipts.insert('));
+  });
+
+  it('THE LEDGER COMMIT IS GATED ON ALLOW', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // A DENIED action must never mutate the ledger. The production store's
+    // transaction body has no in-process behavioural coverage - it needs a
+    // real database - so this invariant is pinned at the source until the
+    // live suite can run.
+    expect(code).toMatch(/if \(decision\.allow && decision\.commit !== 'none'/);
+    // And the commit goes through the locked capability, which cannot exist
+    // unless the row was serialized.
+    expect(code).toContain('locked.commitSpend(');
+    expect(code).toContain('locked.commitPublish(');
+    expect(code).not.toMatch(/ledger\.commitSpend|ledger\.commitPublish/);
+  });
+
+  it('THE IDEMPOTENCY CHECK PRECEDES EVERY SIDE EFFECT', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    const positionOf = (needle: string): number => {
+      const at = code.indexOf(needle);
+      if (at < 0) expect.unreachable(`store.ts no longer contains ${needle}`);
+      return at;
+    };
+
+    // A retry must return the original decision before anything can happen
+    // again: no agent discovered, no ledger locked, no debit, no receipt.
+    const check = positionOf('receipts.findByActionId(');
+    expect(positionOf('lockAction(')).toBeLessThan(check);
+    for (const needle of [
+      'agentRepo',
+      '.discover(',
+      'lockPolicyForDecision(',
+      'lockDailyLedger(',
+      'locked.commitSpend(',
+      'receipts.insert(',
+    ]) {
+      const at = code.indexOf(needle);
+      if (at >= 0) {
+        expect(check, needle).toBeLessThan(at);
+      }
+    }
+  });
+
+  it('the policy snapshot is read before the ledger is locked', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // THE GLOBAL LOCK ORDER: action -> policy -> ledger. Step 13's policy
+    // mutation takes only the policy row, so nothing takes the ledger before
+    // the policy and no cycle can form.
+    expect(code.indexOf('lockPolicyForDecision(')).toBeLessThan(
+      code.indexOf('lockDailyLedger('),
+    );
+  });
+
+  it('the precheck store never mutates policy', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // A precheck that could relax or tighten its own policy would be an agent
+    // governing itself.
+    expect(code).not.toContain('createPolicyMutationService');
+    expect(code).not.toContain('setAgentPolicy');
+    expect(code).toContain('createPolicyReadRepository');
+  });
+
+  it('the precheck store creates no blocks and no events', () => {
+    const store = readFileSync(
+      path.resolve(PACKAGE_ROOT, '..', '..', 'apps', 'api', 'src', 'precheck', 'store.ts'),
+      'utf8',
+    );
+    const code = store.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    // Plane-owned blocks are Step 16; the audit event stream stays uncoupled.
+    expect(code).not.toContain('createBlockRepository');
+    expect(code).not.toContain('createEventRepository');
+    expect(code).not.toContain('resolveOrCreateRuntimeBlock');
   });
 
   it('agent writes are workspace-anchored', () => {

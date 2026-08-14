@@ -144,10 +144,41 @@ describe('there is no policy writer and no unscoped read', () => {
     expect(policyQueries.listEffectivePolicies.length).toBe(2);
   });
 
-  it('exposes exactly two read builders and nothing else', () => {
+  it('exposes exactly four read builders and nothing else', () => {
     // Enumerated, so a writer or a generic criteria query must be a deliberate
     // reviewed addition rather than something that slips in.
-    expect(Object.keys(policyQueries).sort()).toEqual(['findVersion', 'listEffectivePolicies']);
+    expect(Object.keys(policyQueries).sort()).toEqual([
+      'findAgentPolicy',
+      'findVersion',
+      'listEffectivePolicies',
+      'lockVersionForShare',
+    ]);
+  });
+
+  it('the decision snapshot locks the version FOR SHARE, not FOR UPDATE', () => {
+    const { sql } = policyQueries.lockVersionForShare(db, scopeA).toSQL();
+
+    // FOR SHARE blocks the policy MUTATION path (which takes FOR UPDATE) for
+    // the life of the deciding transaction, while letting concurrent prechecks
+    // proceed together. FOR UPDATE here would serialize every precheck in a
+    // workspace against every other - a severe cost on a per-action call.
+    expect(sql.toLowerCase()).toContain('for share');
+    expect(sql.toLowerCase()).not.toContain('for update');
+    expect(sql).toContain('"workspace_policy_state"."workspace_id" =');
+    expect(sql).toContain('::text');
+  });
+
+  it('the single-agent policy read is workspace-scoped', () => {
+    const { sql, params } = policyQueries
+      .findAgentPolicy(db, scopeA, '33333333-3333-4333-8333-333333333333')
+      .toSQL();
+
+    // Both halves of the composite key, so another tenant's policy row can
+    // never be read even holding its exact agent UUID.
+    expect(sql).toContain('"agent_policies"."workspace_id" =');
+    expect(sql).toContain('"agent_policies"."agent_id" =');
+    expect(params[0]).toBe(WORKSPACE_A);
+    expect(sql).not.toContain(WORKSPACE_A);
   });
 
   it('neither query emits a write statement', () => {
