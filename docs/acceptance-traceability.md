@@ -1,6 +1,6 @@
 # Credit Acceptance Traceability
 
-Last updated: **2026-08-14** (Step 19 — authoritative event accounting).
+Last updated: **2026-08-14** (Step 20 — the Credit reference client).
 
 Acceptance criteria are recorded exactly as defined; this document tracks status
 only and does not redefine any criterion.
@@ -37,7 +37,7 @@ only and does not redefine any criterion.
 | --- | --- | --- | --- | --- |
 | AC-01 | Magic-link sign-in | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 5 implemented the complete flow** — request, single-use hashed token with 15-minute expiry, atomic redemption, HttpOnly `SameSite=Lax` session cookie, `/v1/auth/me`, server-side-revoking logout, Resend adapter. 96 auth tests pass and the flow was exercised end to end over real HTTP with a capturing mailer. **NOT PASS:** no client Neon, no client Resend and no staging exist, so the acceptance behaviour has never run in an authorized environment, no real email has been delivered, and the PostgreSQL concurrency race test is skipped. |
 | AC-02 | Workspace + API key | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Both halves now exist.** Step 6: workspace creation with atomic creator membership, membership-bounded listing, per-request authorization producing a trusted `WorkspaceScope`. Step 7: operator-only issuance of `hmp_live_*` keys with 256-bit secrets, SHA-256 hash-at-rest, plaintext shown exactly once, immediate revocation, and bearer authentication that derives the workspace from the credential row. 118 credential tests pass and the flow was exercised end to end over real HTTP. **NOT PASS:** no client Neon, Resend or staging exists, so the acceptance behaviour has never run in an authorized environment. |
-| AC-03 | Documented simulator / reference command | CREDIT — baseline | `FOUNDATION ONLY` | `apps/simulator` exists, compiles, and runs as an executable skeleton. No acceptance command is documented and no scenario is implemented. |
+| AC-03 | Documented simulator / reference command | CREDIT — baseline | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 20 built the reference client.** One documented command — `CONTROL_PLANE_URL=… CONTROL_PLANE_API_KEY=… pnpm simulator <scenario>` — with eight scenarios covering the Credit flows (baseline, over-cap, cap-raise retry, publish burst, pause probe, replay, unprechecked spend, continuous stream) and a full operator walkthrough in [simulator.md](simulator.md). It is an ORDINARY API CONSUMER: one workspace API key, four machine routes, no database import, no workspace id, no operator authority — each enforced by lint and by architecture guards. 25 tests drive it over a **real HTTP socket**; 30 guards pin the boundaries; the compiled CLI was exercised against a local fake control plane. **NOT PASS:** it has never run against an authorized staging environment, because no client-owned Neon, Render or GitHub resource exists. |
 | AC-04 | 3 agents + last-seen within 60 seconds | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 8 implemented the registry:** idempotent machine registration (`POST /v1/agents/register`, bearer-authenticated, workspace derived from the credential), server-authoritative `last_seen_at`, and an operator roster ordered by last contact. Demonstrated end to end over real HTTP: three agents registered, all reporting last-seen within 60 s, with full cross-tenant isolation. **NOT PASS:** no client Neon, Render or staging exists, so the acceptance condition has never been demonstrated in an authorized environment, and the live concurrent-registration race test is skipped. |
 | AC-05 | Timeline + agent filter | CREDIT — functional | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 implemented both halves.** `GET /v1/workspaces/:id/events` returns the workspace stream newest-first by server `received_at` with `id` as a deterministic tiebreaker, bounded pages (default 50, max 100) and opaque `(received_at, id)` cursor pagination that neither repeats nor skips rows. Per-agent filtering resolves the **external** `agent_id` inside the authorized workspace, so a shared `agent-1` cannot cross tenants; an unknown id returns an empty page rather than revealing existence. Browser-session auth only — an API key is refused. A functional operator UI lists events, filters by agent, and loads more. 66 route tests, 24 cursor tests, 25 compiled-SQL tests. **NOT PASS:** never demonstrated in an authorized environment, and the live PostgreSQL suite that proves real ordering, tiebreak and cursor behaviour is **SKIPPED**. |
 | AC-06 | Raw JSON event detail | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 11 completed the drill-through.** `GET /v1/workspaces/:id/events/:eventId` returns the event plus `raw` — the validated event object exactly as Step 10 stored it in `events.payload`, nested structure intact. `raw` is the **validated object, not raw HTTP request data**, which is why no credential or header material can appear in it. The UI renders it via `JSON.stringify(raw, null, 2)` in a `<pre>` as a React text child; a payload containing `<script>` displays as text and there is no `dangerouslySetInnerHTML` in the app. A malformed, unknown or foreign event id is uniformly 404. **NOT PASS:** never demonstrated in an authorized environment, and the live test asserting byte-for-byte `jsonb` round-tripping is **SKIPPED**. |
@@ -504,17 +504,59 @@ rather than only by a source guard, which was the limitation reported in Step 18
 Concurrency, lost updates and deadlock remain provable only against real
 PostgreSQL, and those 18 tests are skipped.
 
-## Summary at Step 19
+## Step 20 note: the reference client
+
+Step 20 advanced exactly one criterion — **AC-03**, from `FOUNDATION ONLY` to
+`IMPLEMENTED / STAGING VERIFICATION BLOCKED` — and deliberately advanced no
+others. A simulator existing does not demonstrate AC-04 through AC-13; those
+need the operator steps and a real control plane.
+
+The client's job is to prove the **public API is sufficient** to run a governed
+fleet. That proof is only worth something if the client is genuinely
+unprivileged, so three properties are enforced rather than asserted:
+
+- **No database.** HTTP only. The whole `@hybrid/db` package is blocked by a
+  simulator-specific lint rule and by an architecture guard, so the proof
+  cannot be quietly undermined by reaching behind the API.
+- **No operator authority.** It cannot set a cap, pause an agent, or read a
+  receipt. Every acceptance scenario documents an operator precondition it
+  cannot satisfy itself — which is the product, not a limitation. A runtime
+  that could raise its own cap would make governance decorative.
+- **No local governance.** It never computes a verdict: no `41 > 25`, no
+  publish counter, no mode inspection. A second engine drifts from the first
+  the moment an operator changes policy.
+
+Two decisions in the client are worth recording, because both are the kind of
+thing a reasonable implementer gets wrong:
+
+- **A retry reuses the SAME id; a new attempt gets a NEW one.** The body is
+  serialised once and replayed byte-identically, so a lost response cannot
+  become a second $4 spend. But after an operator raises a cap, the retry is a
+  *new action* — the denied `action_id` has a durable receipt and correctly
+  replays its denial forever, which would look exactly like the raise not
+  taking effect. `docs/simulator.md` states this prominently.
+- **A plane denial produces no client-side block.** The plane already wrote the
+  receipt and its own block before answering. An `action.blocked` event too
+  would put two records in the audit for one refusal, and an operator could not
+  tell which system stopped the work.
+
+**Verification is honest about its limits.** 25 tests drive the client over a
+real HTTP socket rather than a stubbed `fetch` — a stub would let a client that
+sends malformed JSON or mishandles a 304 pass everything. The compiled CLI was
+then run against a local fake control plane, so the executable itself is
+proven, not just its modules. None of that is staging.
+
+## Summary at Step 20
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **11** (AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **12** (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13)
 - `IMPLEMENTED PARTIAL`: **0**
-- `FOUNDATION` / `FOUNDATION ONLY`: **2** (AC-03, AC-20)
+- `FOUNDATION` / `FOUNDATION ONLY`: **1** (AC-20)
 - `BLOCKED`: **1** (AC-21)
 - `NOT STARTED`: **2** (AC-18, AC-19)
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-11 + 0 + 2 + 1 + 2 + 5 = 21.
+12 + 0 + 1 + 1 + 2 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
 Resend and Render.
@@ -533,9 +575,13 @@ added 18 skipped live tests, Step 18 added 13, and Step 19 adds 18 more —
 including the only tests that can observe a lost update, a concurrent replay,
 or a multi-agent deadlock at all.
 
-**The Credit accounting contract is now code-complete.** Every path that can
-move money exists, and each is idempotent by construction. What has never
-happened is any of it running against a real database.
+**The Credit accounting contract is now code-complete**, and as of Step 20 a
+reference client can drive the whole flow over the public API. Every path that
+can move money exists, and each is idempotent by construction.
+
+What has never happened is any of it running against a real database or a real
+staging deployment. Twelve criteria are code-complete and blocked on exactly
+one thing.
 
 ## Step 3 note: relational foundation per criterion
 

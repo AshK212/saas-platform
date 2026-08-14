@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 19 — authoritative event accounting).
+Last updated: **2026-08-14** (Step 20 — the Credit reference client).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -182,8 +182,9 @@ Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Eleven criteria are now code-complete and blocked only on environment**
-(AC-01, AC-02, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13) —
+**Twelve criteria are now code-complete and blocked only on environment**
+(AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12,
+AC-13) —
 every Credit-phase enforcement criterion among them. That queue has grown at
 every step since Step 5, and each addition increases the chance that the first
 real run against Neon surfaces several problems at once rather than one at a

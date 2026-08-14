@@ -2,7 +2,7 @@
 
 Hosted control plane for governed multi-agent work.
 
-**Current phase: Credit — Step 19, authoritative event accounting.**
+**Current phase: Credit — Step 20, the reference client.**
 The platform provides the toolchain and build path, the database infrastructure,
 the core relational schema with checked-in migrations, the workspace-scoped
 data-access layer, passwordless magic-link sign-in, workspace API credentials,
@@ -13,7 +13,8 @@ authoritative per-agent UTC-day ledger with exact micro-dollar arithmetic, the
 governance decision engine at `POST /v1/actions/precheck` with plane-owned
 blocks for every denial, the operator governance surface — fleet enforcement
 state, decision receipts and block detail — and authoritative spend accounting
-from both the precheck and the event path, with a no-double-debit guarantee.
+from both the precheck and the event path with a no-double-debit guarantee, and a
+reference client that drives the whole Credit flow over the public API.
 
 Business functionality beyond that is intentionally **not** implemented yet: no
 exports, rollups, sharing, gone-dark alerting or demo. **Being signed in grants
@@ -58,7 +59,7 @@ on every request.
 apps/
   api/           Control-plane API (Hono). Step 1: GET /healthz only.
   web/           Operator shell (React + Vite + Tailwind). Step 1: shell only.
-  simulator/     Reference client. Step 1: executable skeleton only.
+  simulator/     Reference client. Drives the Credit flows over the public API.
 
 packages/
   contracts/     Shared transport/domain contracts (Zod).
@@ -274,6 +275,7 @@ behind that prefix.
 - [Ledger](docs/ledger.md) — the authoritative UTC-day ledger, exact micro-dollar arithmetic, and row-lock serialization
 - [Precheck](docs/precheck.md) — the governance decision, commit-on-allow, idempotency, and durable receipts
 - [Governance visibility](docs/governance-visibility.md) — fleet enforcement state, receipt and block audit, and why nothing is recomputed
+- [Reference client](docs/simulator.md) — the documented simulator command, its scenarios, and the Credit walkthrough
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -283,8 +285,8 @@ behind that prefix.
 ## Scope notice
 
 The following are **deliberately absent** as of Step 19: block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
-detection, share links, the public demo, simulator scenarios, and any
-Hermes/OpenClaw runtime integration.
+detection, share links, the public demo, and any Hermes/OpenClaw runtime
+integration.
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

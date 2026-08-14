@@ -93,6 +93,52 @@ export default tseslint.config(
     },
   },
 
+  // THE REFERENCE CLIENT IS AN ORDINARY API CONSUMER.
+  //
+  // The simulator exists to prove the PUBLIC API is sufficient to run a
+  // governed fleet. That proof is worthless if it can reach behind the API:
+  // one `@hybrid/db` import and it is reading the ledger directly rather than
+  // demonstrating that a real runtime could.
+  //
+  // Stricter than the app-wide rule above, which only blocks raw schema and
+  // query-builder access. Here the whole database package is off limits, and
+  // so are the API's internals - a runtime integrating against this contract
+  // will have neither.
+  {
+    files: ['apps/simulator/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@hybrid/config/server',
+              message:
+                'The reference client is not a server. It receives configuration from the environment.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['@hybrid/db', '@hybrid/db/*'],
+              message:
+                'The reference client must reach the control plane over HTTP only. Importing the database package would make it privileged, and it would stop proving the public API is sufficient.',
+            },
+            {
+              group: ['drizzle-orm', 'drizzle-orm/*', 'pg'],
+              message:
+                'The reference client has no database access of any kind.',
+            },
+            {
+              group: ['../../api/*', '**/apps/api/*'],
+              message:
+                'The reference client must not import API internals. It is a consumer of the published HTTP contract.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Server-side and tooling code runs on Node.
   {
     files: [

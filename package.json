@@ -25,11 +25,16 @@
     "db:migrate": "tsc --build packages/db && pnpm --filter @hybrid/db run db:migrate",
     "clean": "tsc --build --clean",
     "dev:api": "pnpm --filter @hybrid/api run dev",
-    "dev:web": "pnpm --filter @hybrid/web run dev"
+    "dev:web": "pnpm --filter @hybrid/web run dev",
+    "simulator": "pnpm --filter @hybrid/simulator run start",
+    "simulator:dev": "pnpm --filter @hybrid/simulator run dev",
+    "build:simulator": "tsc --build apps/simulator"
   },
   "pnpm": {
     "//": "Explicit allowlist so installs never depend on an interactive approval prompt (pnpm 10 blocks lifecycle scripts by default). esbuild is required by Vite, Vitest and tsx.",
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

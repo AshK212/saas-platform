@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Reference client / simulator for the control plane. Step 1: executable skeleton only.",
+  "description": "Reference client for the control-plane public API. Drives the Credit acceptance flows over HTTP with a workspace API key; holds no database access and no operator authority.",
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
