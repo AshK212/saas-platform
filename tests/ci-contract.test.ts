@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -223,7 +223,14 @@ describe('AC-21: the toolchain is pinned, not floating', () => {
 
   it('uses only official first-party actions', () => {
     const used = [...workflow.matchAll(/uses:\s*([^\s]+)/g)].map((m) => m[1] ?? '');
-    const allowed = [/^actions\/checkout@v\d+$/, /^actions\/setup-node@v\d+$/, /^pnpm\/action-setup@v\d+$/];
+    const allowed = [
+      /^actions\/checkout@v\d+$/,
+      /^actions\/setup-node@v\d+$/,
+      // Diagnostic artifact upload only. First-party, and it runs no code of
+      // ours - see the artifact assertions below.
+      /^actions\/upload-artifact@v\d+$/,
+      /^pnpm\/action-setup@v\d+$/,
+    ];
 
     for (const action of used) {
       expect(
@@ -329,13 +336,62 @@ describe('AC-21: the live tests cannot silently skip in CI', () => {
     expect(text(liveStep)).not.toMatch(/run:\s*pnpm run test:db\s*$/);
   });
 
-  it('test:db:ci chains the coverage assertion after the run', () => {
+  it('test:db:ci delegates to the orchestrator, not to a shell chain', () => {
     const scripts = (
       JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
     ).scripts;
 
-    expect(scripts['test:db:ci']).toContain('--config vitest.live.ci.config.ts');
-    expect(scripts['test:db:ci']).toContain('check-live-coverage.mjs');
+    expect(scripts['test:db:ci']).toBe('node scripts/run-live-ci.mjs');
+    // THE ORIGINAL DEFECT. `vitest ... && checker` stopped the checker running
+    // whenever vitest failed, so a run that both failed and skipped reported
+    // neither. Restoring any form of it must break this.
+    expect(scripts['test:db:ci']).not.toContain('&&');
+  });
+
+  it('the orchestrator runs BOTH reporters', () => {
+    const runner = readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8');
+
+    // Losing either one re-creates half the defect: no default reporter means
+    // no readable failures, no json reporter means no coverage evidence.
+    expect(runner).toContain("'--reporter=default'");
+    expect(runner).toContain("'--reporter=json'");
+    expect(runner).toContain('--outputFile=');
+    expect(runner).toContain('vitest.live.ci.config.ts');
+  });
+
+  it('the orchestrator runs the coverage checker UNCONDITIONALLY', () => {
+    const runner = readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8');
+
+    // The checker invocation must not be nested inside a success branch.
+    const checkerAt = runner.indexOf('CHECKER');
+    expect(checkerAt).toBeGreaterThan(-1);
+    expect(runner).not.toMatch(/if (vitestStatus === 0)[sS]*?CHECKER/);
+    expect(runner).toContain('check-live-coverage.mjs');
+  });
+
+  it('the orchestrator fails if EITHER vitest or the checker failed', () => {
+    const runner = readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8');
+
+    expect(runner).toContain('if (vitestStatus !== 0)');
+    expect(runner).toContain('if (checkerStatus !== 0)');
+    // Vitest's own status is preserved rather than replaced by a synthetic one.
+    expect(runner).toContain('process.exit(vitestStatus)');
+    expect(runner).toContain('process.exit(checkerStatus)');
+  });
+
+  it('the orchestrator treats a missing report as a failure', () => {
+    const runner = readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8');
+
+    // An unanswerable coverage question is a failure, not a pass.
+    expect(runner).toContain('coverage cannot be verified');
+  });
+
+  it('the vitest override cannot be used under CI', () => {
+    const runner = readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8');
+
+    // The one test seam, and the guard that stops it laundering a real run.
+    expect(runner).toContain('LIVE_CI_VITEST_BIN');
+    expect(runner).toContain('LIVE_CI_VITEST_BIN is set, but so is CI');
   });
 
   it('the coverage checker fails on skips when a database is configured', () => {
@@ -449,18 +505,29 @@ describe('AC-21: least privilege and PR safety', () => {
 
   it('performs no deployment', () => {
     // AC-21 is verification. Deployment is the next phase.
-    for (const forbidden of [
-      'deploy',
-      'render.com',
-      'environment:',
-      'actions/upload-artifact',
-      'docker/build-push',
-    ]) {
+    //
+    // `actions/upload-artifact` used to be on this list, when the workflow
+    // published nothing at all. It now uploads one diagnostic file, which is
+    // not a deployment — nothing is released, tagged, pushed to a registry or
+    // sent to a running environment. It is constrained instead by the
+    // artifact assertions above: exactly one such step, uploading exactly the
+    // report, carrying no credential.
+    for (const forbidden of ['deploy', 'render.com', 'environment:', 'docker/build-push']) {
       expect(
         executable.toLowerCase(),
         `workflow must not contain ${forbidden}`,
       ).not.toContain(forbidden.toLowerCase());
     }
+  });
+
+  it('publishes nothing beyond the single diagnostic artifact', () => {
+    const uploads = [...executable.matchAll(/uses:\s*actions\/upload-artifact/g)];
+
+    expect(uploads).toHaveLength(1);
+    // And no registry or release action of any kind.
+    expect(executable).not.toMatch(/actions\/(create-release|upload-release-asset)/);
+    expect(executable).not.toContain('npm publish');
+    expect(executable).not.toContain('pnpm publish');
   });
 });
 
@@ -475,8 +542,50 @@ describe('AC-21: no failure can be swallowed', () => {
     expect(workflow).not.toMatch(/set\s+\+e/);
   });
 
-  it('marks no job as advisory via if: always()', () => {
-    expect(workflow).not.toMatch(/if:\s*always\(\)/);
+  it('uses if: always() ONLY on the diagnostic artifact upload', () => {
+    // This rule was a blanket ban, and it was right to be: `if: always()` on a
+    // validation step turns a red result advisory. It is NARROWED rather than
+    // dropped, because exactly one legitimate use exists — uploading the
+    // failure report is wanted precisely WHEN the tests failed, and a file
+    // upload cannot influence any test's status.
+    const occurrences = [...executable.matchAll(/if:\s*always\(\)/g)];
+    expect(occurrences).toHaveLength(1);
+
+    const uploadStep = text(step(/Upload live-test report/));
+    expect(uploadStep).toMatch(/if:\s*always\(\)/);
+    expect(uploadStep).toContain('actions/upload-artifact');
+  });
+
+  it('NO VALIDATION STEP is advisory', () => {
+    // The property the blanket ban existed to protect, now asserted directly:
+    // every step that runs a command must be able to fail the job.
+    const validationSteps = [
+      /Verify \(lint/,
+      /Schema drift/,
+      /Migration journal/,
+      /Apply migrations/,
+      /Live PostgreSQL tests/,
+    ];
+
+    for (const name of validationSteps) {
+      const body = text(step(name));
+
+      expect(body.length, `step ${String(name)} not found`).toBeGreaterThan(0);
+      expect(body).not.toContain('continue-on-error');
+      expect(body).not.toMatch(/if:\s*always\(\)/);
+      expect(body).not.toMatch(/if:\s*success\(\)/);
+    }
+  });
+
+  it('the artifact step uploads ONLY the report, and no credential', () => {
+    const uploadStep = text(step(/Upload live-test report/));
+
+    expect(uploadStep).toContain('.vitest-live-report.json');
+    expect(uploadStep).not.toContain('DATABASE_URL');
+    expect(uploadStep).not.toContain('secrets.');
+    // No directory sweep that could hoover up an env dump or a log file.
+    expect(uploadStep).not.toMatch(/path:\s*\.\s*$/m);
+    expect(uploadStep).not.toMatch(/path:\s*\*\*/);
   });
 
   it('does not pass --passWithNoTests to the enforcing live command', () => {
@@ -485,9 +594,13 @@ describe('AC-21: no failure can be swallowed', () => {
     ).scripts;
 
     // The live config sets passWithNoTests so an unconfigured LOCAL run is not
-    // a failure. The CI variant must not additionally mask an empty run - that
-    // is precisely what check-live-coverage.mjs is there to catch.
-    expect(scripts['test:db:ci']).toContain('check-live-coverage.mjs');
+    // a failure. The CI path must not additionally mask an empty run - that is
+    // precisely what check-live-coverage.mjs is there to catch, and the
+    // orchestrator is what guarantees it runs.
+    expect(scripts['test:db:ci']).toBe('node scripts/run-live-ci.mjs');
+    expect(readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8')).toContain(
+      'check-live-coverage.mjs',
+    );
   });
 });
 
@@ -681,9 +794,183 @@ describe('AC-21: the CI live config cannot drift from the local one', () => {
       JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
     ).scripts;
 
-    expect(scripts['test:db:ci']).toContain('vitest.live.ci.config.ts');
+    expect(readFileSync(path.join('scripts', 'run-live-ci.mjs'), 'utf8')).toContain(
+      'vitest.live.ci.config.ts',
+    );
     // ...and the plain local command still uses the permissive one.
     expect(scripts['test:db']).toContain('vitest.live.config.ts');
     expect(scripts['test:db']).not.toContain('vitest.live.ci.config.ts');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The orchestrator's exit semantics, proven by running it for real.
+//
+// No PostgreSQL is involved and none is needed: what is under test is how two
+// exit statuses combine, which is exactly the logic the original `&&` got
+// wrong. Vitest is replaced by a stub (via the CI-refused seam) and the
+// coverage checker by a stub planted in a temporary working directory, so the
+// real script executes its real branches.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('AC-21: the live-CI orchestrator combines statuses correctly', () => {
+  const RUNNER = path.resolve('scripts', 'run-live-ci.mjs');
+
+  interface Scenario {
+    /** Exit status the stubbed vitest returns. */
+    vitest: number;
+    /** Exit status the stubbed coverage checker returns. */
+    checker: number;
+    /** Whether the stubbed vitest writes a report. */
+    report?: 'valid' | 'corrupt' | 'missing';
+  }
+
+  function runOrchestrator({ vitest, checker, report = 'valid' }: Scenario): {
+    code: number;
+    output: string;
+  } {
+    const dir = path.join(os.tmpdir(), `ac21-orch-${randomUUID()}`);
+    mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+
+    // A stub vitest: writes the report (or does not) and exits as directed.
+    const reportBody =
+      report === 'corrupt'
+        ? 'not json at all'
+        : JSON.stringify({
+            numTotalTests: 230,
+            numPassedTests: vitest === 0 ? 230 : 0,
+            numFailedTests: vitest === 0 ? 0 : 230,
+            numPendingTests: 0,
+            testResults: [
+              {
+                assertionResults: [
+                  {
+                    fullName: 'stub suite > a stubbed failing test',
+                    status: vitest === 0 ? 'passed' : 'failed',
+                    failureMessages: vitest === 0 ? [] : ['Error: stubbed failure\n  at nowhere'],
+                  },
+                ],
+              },
+            ],
+          });
+
+    writeFileSync(
+      path.join(dir, 'stub-vitest.mjs'),
+      report === 'missing'
+        ? `process.exit(${String(vitest)});\n`
+        : `import { writeFileSync } from 'node:fs';\n` +
+            `writeFileSync('.vitest-live-report.json', ${JSON.stringify(reportBody)});\n` +
+            `process.exit(${String(vitest)});\n`,
+    );
+
+    // A stub checker, at the path the orchestrator resolves from the cwd.
+    writeFileSync(
+      path.join(dir, 'scripts', 'check-live-coverage.mjs'),
+      `console.log('[stub-checker] ran');\nprocess.exit(${String(checker)});\n`,
+    );
+
+    try {
+      const result = spawnSync(process.execPath, [RUNNER], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env['PATH'] ?? '',
+          LIVE_CI_VITEST_BIN: path.join(dir, 'stub-vitest.mjs'),
+        },
+      });
+      return {
+        code: result.status ?? -1,
+        output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('A. tests pass and coverage passes -> exits 0', () => {
+    const { code, output } = runOrchestrator({ vitest: 0, checker: 0 });
+
+    expect(code).toBe(0);
+    expect(output).toContain('[stub-checker] ran');
+    expect(output).toContain('live suites passed and coverage was verified');
+  });
+
+  it('B. TESTS FAIL, coverage passes -> exits non-zero AND still runs the checker', () => {
+    // The original defect: `&&` skipped the checker entirely here.
+    const { code, output } = runOrchestrator({ vitest: 1, checker: 0 });
+
+    expect(code).toBe(1);
+    expect(output).toContain('[stub-checker] ran');
+    expect(output).toContain('live tests did not pass');
+  });
+
+  it('C. tests pass, COVERAGE FAILS -> exits non-zero', () => {
+    // The all-skipped case. A green suite must not carry a hollow run through.
+    const { code, output } = runOrchestrator({ vitest: 0, checker: 1 });
+
+    expect(code).toBe(1);
+    expect(output).toContain('live coverage verification did not pass');
+  });
+
+  it('D. both fail -> exits non-zero, preserving vitest status', () => {
+    const { code, output } = runOrchestrator({ vitest: 2, checker: 1 });
+
+    expect(code).toBe(2);
+    expect(output).toContain('[stub-checker] ran');
+  });
+
+  it('E. no report written -> fails safely with a useful message', () => {
+    const { code, output } = runOrchestrator({ vitest: 0, checker: 0, report: 'missing' });
+
+    expect(code).toBe(1);
+    expect(output).toContain('coverage cannot be verified');
+    // The checker cannot answer without a report, so it is not pretended to.
+    expect(output).not.toContain('[stub-checker] ran');
+  });
+
+  it('E2. corrupt report -> the checker still runs and decides', () => {
+    // A malformed report is the checker's problem to report, not a crash in
+    // the orchestrator: the summary is skipped and the checker exits 2.
+    const { code, output } = runOrchestrator({ vitest: 0, checker: 2, report: 'corrupt' });
+
+    expect(code).toBe(2);
+    expect(output).toContain('[stub-checker] ran');
+  });
+
+  it('prints a compact failure summary derived from the report', () => {
+    const { output } = runOrchestrator({ vitest: 1, checker: 0 });
+
+    expect(output).toContain('[live-tests] FAILED: 1 test(s)');
+    expect(output).toContain('stub suite > a stubbed failing test');
+    expect(output).toContain('Error: stubbed failure');
+    // First line only - the default reporter already printed the stack.
+    expect(output).not.toContain('at nowhere');
+  });
+
+  it('REFUSES the vitest override when CI is set', () => {
+    const dir = path.join(os.tmpdir(), `ac21-orch-${randomUUID()}`);
+    mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    writeFileSync(path.join(dir, 'stub-vitest.mjs'), 'process.exit(0);\n');
+
+    try {
+      const result = spawnSync(process.execPath, [RUNNER], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          PATH: process.env['PATH'] ?? '',
+          CI: 'true',
+          LIVE_CI_VITEST_BIN: path.join(dir, 'stub-vitest.mjs'),
+        },
+      });
+
+      // Without this guard the seam would be the one way to make a failing
+      // integration job green.
+      expect(result.status).toBe(1);
+      expect(`${result.stdout ?? ''}${result.stderr ?? ''}`).toContain(
+        'LIVE_CI_VITEST_BIN is set, but so is CI',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

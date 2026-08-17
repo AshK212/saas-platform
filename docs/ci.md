@@ -197,9 +197,10 @@ and **exits 0**. Vitest is behaving correctly; the job is simply not testing
 anything. A pipeline that reports that as integration success is worse than
 having no integration job, because it manufactures confidence.
 
-`test:db:ci` therefore runs the suites with a JSON reporter and hands the counts
-to [`scripts/check-live-coverage.mjs`](../scripts/check-live-coverage.mjs), which
-fails when a database is configured and:
+`test:db:ci` therefore runs [`scripts/run-live-ci.mjs`](../scripts/run-live-ci.mjs),
+which hands the run's counts to
+[`scripts/check-live-coverage.mjs`](../scripts/check-live-coverage.mjs). That fails
+when a database is configured and:
 
 - any test skipped, or
 - no test was collected, or
@@ -228,6 +229,54 @@ invoke the live suites at all. The strong database environment is CI's job.
 
 ---
 
+## How the live job reports (and how it once didn't)
+
+The first real GitHub Actions run of the integration job failed with this, in
+full:
+
+```
+JSON report written to /home/runner/.../.vitest-live-report.json
+ELIFECYCLE Command failed with exit code 1.
+```
+
+No test names, no assertions, no counts. Two mistakes, both in the original
+step:
+
+1. **`--reporter=json` REPLACES the default reporter.** Every failure message
+   went into a file, nothing was printed, and the file died with the runner.
+2. **The command was `vitest … && checker`.** When vitest exited non-zero the
+   coverage checker never ran, so a run that both failed *and* skipped reported
+   neither.
+
+The evidence existed on the runner and was thrown away.
+
+[`scripts/run-live-ci.mjs`](../scripts/run-live-ci.mjs) replaces the chain and
+makes both signals unconditional:
+
+| Step | Guarantee |
+| --- | --- |
+| vitest with `--reporter=default` **and** `--reporter=json` | readable failures in the log *and* machine-readable counts |
+| a compact `[live-tests] FAILED:` roll-up from the report | the failing names at the END of the log, where GitHub shows them first |
+| the coverage checker, **always** | skip evidence even when tests failed |
+| exit non-zero if **either** failed | a failing suite can never be laundered green; vitest's own status is preserved |
+| a missing report is a failure | an unanswerable coverage question is not a pass |
+
+The full report is also uploaded as the `live-test-report` artifact (7-day
+retention) so per-test assertion messages survive the runner.
+
+It is written in Node rather than shell because exit-status handling differs
+between sh, bash and PowerShell, and this repository is developed on Windows and
+run on Linux.
+
+### The one test seam
+
+`LIVE_CI_VITEST_BIN` lets the contract tests point vitest at a stub, which is
+the only way to drive exit statuses without a database. It is **refused when
+`CI` is set** — otherwise it would be the single hole in a script whose whole
+purpose is that a failing suite cannot be turned green.
+
+---
+
 ## Security posture
 
 - `permissions: contents: read`, and nothing else. No `packages: write`, no
@@ -247,9 +296,15 @@ invoke the live suites at all. The strong database environment is CI's job.
 
 ## No failure can be swallowed
 
-No `continue-on-error`, no `|| true`, no `|| exit 0`, no `set +e`, no
-`if: always()`. The integration job is **not** advisory. A red test makes CI
-red.
+No `continue-on-error`, no `|| true`, no `|| exit 0`, no `set +e`. The
+integration job is **not** advisory. A red test makes CI red.
+
+`if: always()` appears exactly **once**, on the artifact-upload step, and the
+contract test pins it there. The blanket ban was right for validation steps —
+it turns a red result advisory — but uploading the failure report is wanted
+precisely *when* the tests failed, and a file upload cannot influence any
+test's status. Every step that runs a command is separately asserted to carry
+neither `continue-on-error` nor `if: always()`.
 
 Job timeouts are 20 and 25 minutes. The live suites include lock-serialization
 and deadlock-ordering tests, and a genuine deadlock must eventually fail the job
@@ -261,7 +316,7 @@ runtime rather than absurdly high.
 ## The CI contract test
 
 [`tests/ci-contract.test.ts`](../tests/ci-contract.test.ts) treats the workflow
-as an architecture artifact and asserts 57 properties of it, in the same suite as
+as an architecture artifact and asserts 73 properties of it, in the same suite as
 everything else. **Weakening the pipeline now breaks the build it was weakened
 to fix.**
 
@@ -316,6 +371,51 @@ trustworthy gate, not a simultaneous upgrade.
 The migration is next-phase work. When it happens, CI is the right place to
 prove it, and the pin lives in exactly one file.
 
+## Recorded, not fixed
+
+Two things the first real run surfaced that are deliberately **not** touched by
+the observability remediation, because neither is shown to cause the failing
+assertion and fixing either on suspicion would be a speculative change to
+working code.
+
+### pg deprecation warning — TEST-CODE TECHNICAL DEBT / pg 9 incompatibility risk
+
+The run logged:
+
+> `Calling client.query() when the client is already executing a query is
+> deprecated and will be removed in pg@9.0`
+
+Traced to source, it is **test code, and incidental**:
+
+- **Production is clean.** `apps/api/src/governance/read-store.ts` uses
+  `Promise.all` over `db` — the **pool** — so each concurrent query takes its
+  own client.
+- The warning comes from `packages/db/tests/governance.live.test.ts`, where
+  `readFleet(tx, …)` passes a **transaction** (one client) into the same
+  `Promise.all` shape.
+- `pg` is **8.23.0**, where concurrent queries on one client are **queued**,
+  not rejected. Results remain correct — which is why it is a deprecation
+  warning and not an error.
+
+So it cannot fail an assertion today. It becomes **fatal at pg 9**, and it means
+those particular tests are serialised rather than genuinely concurrent. Worth
+fixing on its own schedule; not part of a reporting fix.
+
+### GitHub forcing Node 24 for action internals
+
+GitHub reports that `actions/checkout@v4`, `actions/setup-node@v4` and
+`pnpm/action-setup@v4` now execute their own JavaScript on Node 24, because
+Node 20 is deprecated for actions.
+
+That is the **actions' runtime**, not the project's. The application still
+builds and tests on Node 20.20.2 as pinned by `.nvmrc`, and nothing about the
+warning changes what `node --version` reports inside a `run:` step. It is
+unrelated to the live-suite failure and is recorded here rather than mixed into
+this remediation. The project's own Node major is a next-phase migration — see
+[deployment.md](deployment.md#node-version).
+
+---
+
 ## The PostgreSQL major is provisional
 
 `postgres:17` is pinned because a pinned major is required and 17 is a
@@ -329,26 +429,28 @@ gap, not a guarantee.
 
 ## Status
 
-**AC-21: `IMPLEMENTED / CLIENT GITHUB VERIFICATION BLOCKED`. Not PASS.**
+**AC-21: `IMPLEMENTED / CLIENT GITHUB VERIFICATION FAILED`. Not PASS.**
 
-What exists and passes locally: the workflow, 57 contract assertions, every
+The repository now has a client-owned remote and a first real run has happened.
+**Job 1 (`verify`) passed. Job 2 (`integration`) failed.** The live suites
+executed against real PostgreSQL for the first time — and at least one test
+failed. Which one is not yet known, because the job reported nothing but an
+exit code; that reporting defect is what this remediation fixes.
+
+What exists and passes locally: the workflow, 73 contract assertions, every
 non-GitHub-specific command in it, and mutation evidence that the gate cannot be
 quietly weakened.
 
-What has never happened: a GitHub Actions run. **There is no remote.** AC-21
-asks for CI *green on `main`*, and no run has ever occurred anywhere, so the
-criterion cannot be assessed. It becomes PASS after the workflow is pushed to
-the client-owned repository and a run on `main` succeeds.
+What has not happened: a **green** run. AC-21 asks for CI green on `main`, and
+job 2 is red. It becomes PASS when both jobs pass on `main`.
 
-Three things in this file are also unproven as a consequence, and are not
-claimed:
+Three things in this file remain unproven, and are not claimed:
 
-1. **The integration job has never executed.** No Docker daemon and no local
-   PostgreSQL were available, so the disposable-service path, the migration step
-   and the 236 live tests have not run anywhere. What *was* proven locally is
-   that the skip gate opens: with `TEST_DATABASE_URL` set to an unreachable
-   host, the live suites execute and fail rather than skip — so a real database
-   will run them.
+1. **The live suites do not pass.** The integration job ran them against real
+   PostgreSQL and at least one failed. The cause is unknown and deliberately
+   un-guessed: no Docker daemon or local PostgreSQL exists here to reproduce it,
+   so the next run's output is the evidence. What the failure is NOT is a skip
+   — a skipped run exits 0, and this exited 1.
 2. **The workflow YAML has never been parsed by GitHub.** It is asserted to be
    tab-free, evenly indented, free of duplicate top-level keys and structurally
    consistent, which is not the same as accepted by Actions.

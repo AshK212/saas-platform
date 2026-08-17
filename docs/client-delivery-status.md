@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-16** (Step 24 — AC-21 CI verification gate).
+Last updated: **2026-08-17** (Step 24 — AC-21 CI verification gate; first real GitHub run).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -277,13 +277,29 @@ The daily-push obligation begins on the day the client repository is supplied.
 Work to date exists as local commits only. Local commit history does not count
 toward this requirement.
 
-Related: **AC-21 (CI green on `main`) is also gated on this item, not on any
-remaining engineering.** The workflow, its enforcement scripts and 53 contract
-assertions are complete and pass locally; what has never happened is a GitHub
-Actions run, because there is nowhere to run one. A developer-owned repository
-would not satisfy it either — this obligation places ownership with Ashir, and
-AC-21's evidence has to come from the client's own repository. See
+**This item is now SATISFIED in part: the client repository exists and the
+code has been pushed.** `origin` is `AshK212/saas-platform` and `main` is at
+`cbb3767`. The daily-push obligation begins from that date.
+
+The first GitHub Actions run followed immediately, and it is worth recording
+precisely what it bought:
+
+- **Job 1 (`verify`) PASSED on a hosted runner.** Lint, typecheck, 2540
+  in-process tests, production builds and both schema gates are green somewhere
+  other than a developer's machine, and the workflow YAML parses.
+- **Job 2 (`integration`) FAILED.** For the first time in the project's
+  history, the live suites ran against a real PostgreSQL server — and at least
+  one assertion did not hold.
+
+That second line is not a setback; it is the first real information the project
+has ever had about its database behaviour. Every previous report said those 236
+tests were *unrun*. They have now run, and the gap is measured rather than
+assumed. What the failure IS remains unknown, because the job printed only an
+exit code — a reporting defect in the pipeline, since remediated. See
 [ci.md](ci.md).
+
+**AC-21 is therefore `IMPLEMENTED / CLIENT GITHUB VERIFICATION FAILED`, not
+BLOCKED and not PASS.**
 
 ### 5. Staging refreshed at least every 2 business days
 

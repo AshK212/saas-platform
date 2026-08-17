@@ -159,11 +159,32 @@ jobs:
       # The live suites. TEST_DATABASE_URL is the ONLY database variable in
       # scope here, matching the gate every live suite reads.
       #
-      # `test:db:ci` runs the same suites as `pnpm test:db` and then asserts
-      # they actually EXECUTED. Without that assertion a job whose database
-      # never came up would print "236 skipped", exit 0, and be indistinguishable
-      # from success. See scripts/check-live-coverage.mjs.
+      # `test:db:ci` runs scripts/run-live-ci.mjs, which runs the suites with
+      # BOTH the default reporter (human-readable failures in this log) and the
+      # json reporter (machine-readable counts), then ALWAYS runs the coverage
+      # checker, then exits non-zero if either failed.
+      #
+      # The first real run of this job failed with nothing but "ELIFECYCLE
+      # Command failed with exit code 1", because `--reporter=json` replaced the
+      # default reporter and `&&` stopped the checker from ever running. Both
+      # signals are now unconditional.
       - name: Live PostgreSQL tests (zero may skip)
         env:
           TEST_DATABASE_URL: postgresql://hybrid_ci:hybrid_ci@localhost:5432/hybrid_ci
         run: pnpm run test:db:ci
+
+      # Diagnostic evidence, kept when the step above fails - which is exactly
+      # when it is wanted. `if: always()` is required for that and is confined
+      # to this one step: it uploads a file and can never turn a red job green,
+      # because it neither runs tests nor influences their status.
+      #
+      # The report contains test names, statuses and assertion messages. It
+      # contains no environment dump, no connection string and no credential.
+      - name: Upload live-test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-test-report
+          path: .vitest-live-report.json
+          if-no-files-found: ignore
+          retention-days: 7

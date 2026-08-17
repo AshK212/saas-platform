@@ -20,7 +20,7 @@
     "start:api": "pnpm --filter @hybrid/api run start",
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build",
     "test:db": "vitest run --config vitest.live.config.ts",
-    "test:db:ci": "vitest run --config vitest.live.ci.config.ts --reporter=json --outputFile=.vitest-live-report.json && node scripts/check-live-coverage.mjs .vitest-live-report.json",
+    "test:db:ci": "node scripts/run-live-ci.mjs",
     "db:drift": "node scripts/check-schema-drift.mjs",
     "db:generate": "pnpm --filter @hybrid/db run db:generate",
     "db:check": "pnpm --filter @hybrid/db run db:check",
