@@ -285,6 +285,7 @@ behind that prefix.
 - [Governance visibility](docs/governance-visibility.md) — fleet enforcement state, receipt and block audit, and why nothing is recomputed
 - [Reference client](docs/simulator.md) — the documented simulator command, its scenarios, and the Credit walkthrough
 - [Read-only sharing](docs/sharing.md) — share-token format, hash-at-rest, the one-time exchange, and revocation
+- [Public demo mode](docs/demo.md) — the fourth read authority, why the slug is a locator and not a secret, and how recurring blocks are produced through the real path
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness
 - [Deployment](docs/deployment.md) — Render and Neon direction
@@ -293,9 +294,12 @@ behind that prefix.
 
 ## Scope notice
 
-The following are **deliberately absent** as of Step 19: block email alerts, CSV/JSON export, daily rollups and charts, gone-dark
-detection, the public demo, and any Hermes/OpenClaw runtime
-integration.
+The following are **deliberately absent** as of Step 22: block email alerts,
+CSV/JSON export, daily rollups and charts, gone-dark detection, and any
+Hermes/OpenClaw runtime integration.
+
+The public demo is no longer on that list — Step 22 implemented it. See
+[demo.md](docs/demo.md).
 
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion

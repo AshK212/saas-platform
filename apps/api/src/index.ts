@@ -22,6 +22,10 @@ import { createDrizzlePolicyMutationStore } from './policy/mutation-store.js';
 import { createDrizzlePolicyStore } from './policy/store.js';
 import { createDrizzleGovernanceReadStore } from './governance/read-store.js';
 import {
+  createDrizzleDemoManagementStore,
+  createDrizzleDemoResolverStore,
+} from './demo/store.js';
+import {
   createDrizzleShareManagementStore,
   createDrizzleShareResolverStore,
 } from './share/store.js';
@@ -141,6 +145,8 @@ function main(): void {
     governanceReadStore: db === undefined ? undefined : createDrizzleGovernanceReadStore(db),
     shareManagementStore: db === undefined ? undefined : createDrizzleShareManagementStore(db),
     shareResolverStore: db === undefined ? undefined : createDrizzleShareResolverStore(db),
+    demoManagementStore: db === undefined ? undefined : createDrizzleDemoManagementStore(db),
+    demoResolverStore: db === undefined ? undefined : createDrizzleDemoResolverStore(db),
   });
 
   const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {

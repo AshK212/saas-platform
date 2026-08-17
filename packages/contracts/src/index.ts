@@ -291,3 +291,43 @@ export type {
   ShareReceiptListResponse,
   ShareWorkspace,
 } from './share.js';
+
+// ─── Public demo mode (AC-19) ───────────────────────────────────────────────
+export {
+  DEMO_PUBLIC_PREFIX,
+  DEMO_SLUG_PATTERN,
+  MAX_DEMO_SLUG_LENGTH,
+  demoAgentListResponseSchema,
+  demoAgentsPath,
+  demoBlockListResponseSchema,
+  demoBlocksPath,
+  demoErrorSchema,
+  demoEventDetailResponseSchema,
+  demoEventListResponseSchema,
+  demoEventPath,
+  demoEventsPath,
+  demoReceiptListResponseSchema,
+  demoReceiptsPath,
+  demoSettingsResponseSchema,
+  demoSettingsSchema,
+  demoSlugSchema,
+  demoViewPath,
+  demoWorkspacePath,
+  demoWorkspaceResponseSchema,
+  demoWorkspaceSchema,
+  setDemoRequestSchema,
+  workspaceDemoPath,
+} from './demo.js';
+export type {
+  DemoAgentListResponse,
+  DemoBlockListResponse,
+  DemoError,
+  DemoEventDetailResponse,
+  DemoEventListResponse,
+  DemoReceiptListResponse,
+  DemoSettings,
+  DemoSettingsResponse,
+  DemoWorkspace,
+  DemoWorkspaceResponse,
+  SetDemoRequest,
+} from './demo.js';

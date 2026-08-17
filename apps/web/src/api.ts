@@ -26,6 +26,26 @@ import {
   workspaceReceiptPath,
   workspaceReceiptsPath,
   workspaceShareLinksPath,
+  workspaceDemoPath,
+  demoAgentListResponseSchema,
+  demoAgentsPath,
+  demoBlockListResponseSchema,
+  demoBlocksPath,
+  demoEventDetailResponseSchema,
+  demoEventListResponseSchema,
+  demoEventPath,
+  demoEventsPath,
+  demoReceiptListResponseSchema,
+  demoReceiptsPath,
+  demoSettingsResponseSchema,
+  demoWorkspacePath,
+  demoWorkspaceResponseSchema,
+  type DemoAgentListResponse,
+  type DemoBlockListResponse,
+  type DemoEventListResponse,
+  type DemoReceiptListResponse,
+  type DemoSettings,
+  type DemoWorkspace,
   revokeShareLinkPath,
   shareLinkCreatedResponseSchema,
   shareLinkListResponseSchema,
@@ -625,5 +645,96 @@ export async function fetchSharedBlocks(): Promise<ShareBlockListResponse | null
     return null;
   }
   const parsed = shareBlockListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+// ─── Public demo mode (AC-19) ───────────────────────────────────────────────
+
+/** Reads this workspace's demo state. OPERATOR ONLY. */
+export async function fetchDemoSettings(workspaceId: string): Promise<DemoSettings | null> {
+  const response = await fetch(workspaceDemoPath(workspaceId), { credentials: 'include' });
+  if (!response.ok) {
+    return null;
+  }
+  const parsed = demoSettingsResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.demo : null;
+}
+
+/**
+ * Publishes or withdraws the public demo. OPERATOR ONLY.
+ *
+ * Disabling clears the slug, so re-enabling mints a new one and every
+ * previously-published URL stays dead.
+ */
+export async function setDemoEnabled(
+  workspaceId: string,
+  enabled: boolean,
+): Promise<DemoSettings> {
+  const response = await fetch(workspaceDemoPath(workspaceId), {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Only an operator can change public demo mode.'
+        : 'Could not change public demo mode.',
+    );
+  }
+  const parsed = demoSettingsResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    throw new Error('Unexpected response from the server.');
+  }
+  return parsed.data.demo;
+}
+
+/**
+ * The public demo reads.
+ *
+ * Every one takes the slug from the URL and NO credential - no cookie, no
+ * token, no key. `null` means the demo is unavailable: unknown, malformed or
+ * turned off, deliberately indistinguishable.
+ */
+export async function fetchDemoWorkspace(slug: string): Promise<DemoWorkspace | null> {
+  const response = await fetch(demoWorkspacePath(slug));
+  if (!response.ok) return null;
+  const parsed = demoWorkspaceResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.workspace : null;
+}
+
+export async function fetchDemoAgents(slug: string): Promise<DemoAgentListResponse | null> {
+  const response = await fetch(demoAgentsPath(slug));
+  if (!response.ok) return null;
+  const parsed = demoAgentListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+export async function fetchDemoEvents(slug: string): Promise<DemoEventListResponse | null> {
+  const response = await fetch(demoEventsPath(slug));
+  if (!response.ok) return null;
+  const parsed = demoEventListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+export async function fetchDemoEvent(slug: string, eventId: string): Promise<EventDetail | null> {
+  const response = await fetch(demoEventPath(slug, eventId));
+  if (!response.ok) return null;
+  const parsed = demoEventDetailResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data.event : null;
+}
+
+export async function fetchDemoReceipts(slug: string): Promise<DemoReceiptListResponse | null> {
+  const response = await fetch(demoReceiptsPath(slug));
+  if (!response.ok) return null;
+  const parsed = demoReceiptListResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
+export async function fetchDemoBlocks(slug: string): Promise<DemoBlockListResponse | null> {
+  const response = await fetch(demoBlocksPath(slug));
+  if (!response.ok) return null;
+  const parsed = demoBlockListResponseSchema.safeParse(await response.json());
   return parsed.success ? parsed.data : null;
 }

@@ -106,6 +106,7 @@ export {
   createEventRepository,
   createIngestLockRepository,
   createLedgerRepository,
+  createDemoSettingsRepository,
   createShareTokenRepository,
   createPlaneBlockRepository,
   planeBlockQueries,
@@ -152,6 +153,8 @@ export type {
   CommittedAgentPolicy,
   DailyLedgerState,
   LedgerRepository,
+  DemoSettingsRepository,
+  DemoSettingsRow,
   InsertShareTokenInput,
   LockedDailyLedger,
   ShareTokenRepository,
@@ -204,6 +207,7 @@ export type {
 export {
   authenticateApiCredential,
   authorizeWorkspaceForUser,
+  resolvePublicDemo,
   resolveShareToken,
   findDemoWorkspaceBySlug,
   findMembership,
@@ -217,6 +221,7 @@ export type {
   AuthorizedWorkspaceSummary,
   MembershipRole,
   MembershipRow,
+  ResolvedDemoWorkspace,
   ResolvedShareToken,
   WorkspaceRow,
 } from './resolvers/index.js';

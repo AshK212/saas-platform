@@ -85,6 +85,38 @@ Nothing sensitive is committed.
   secret behind a `VITE_` prefix** — it will be inlined into public JavaScript.
 - See [`.env.example`](../.env.example) for the expected variable set.
 
+### The public demo generator (AC-19)
+
+The demo generator is a **third process**, not a service Render needs to route
+traffic to. It runs the reference client in `demo` mode:
+
+```
+pnpm --filter @hybrid/simulator start demo
+```
+
+Deploy it as a Render **background worker**, not a web service — it listens on
+no port and answers no request. It needs `CONTROL_PLANE_URL` and a workspace
+API key in `CONTROL_PLANE_API_KEY` (a secret, `sync: false`), plus the
+optional `DEMO_GENERATOR_INTERVAL_MS` and `DEMO_BLOCK_INTERVAL_MS`.
+
+Three deployment notes that are easy to get wrong:
+
+1. **It needs no database access and must not be given any.** The whole
+   `@hybrid/db` package is blocked in that workspace by lint and by an
+   architecture guard. Do not add `DATABASE_URL` to the worker.
+2. **Recurring blocks depend on the demo workspace's policy**, not on the
+   worker's configuration: `agent-a` must be `budgeted` with a daily spend cap
+   below $41, set through the operator UI. If it is not, the worker runs
+   happily and produces no blocks — and says so in its log.
+3. **The worker runs until stopped.** It exits non-zero only on a rejected
+   credential, which is deliberate: retrying forever against a key the plane
+   will never accept is noise. Configure the restart policy accordingly, and
+   treat a restart loop as "the key is wrong", not as flakiness.
+
+Turning the demo **off** is an operator action in the product, not a
+deployment action. Stopping the worker only stops new activity — the page stays
+public until the toggle is switched.
+
 ### Health and readiness endpoints
 
 | Endpoint | Purpose | Render usage |

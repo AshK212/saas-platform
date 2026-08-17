@@ -53,7 +53,7 @@ only and does not redefine any criterion.
 | AC-16 | Filtered CSV parity | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-17 | Daily rollup | LATER | `DEFERRED` | Out of Credit phase. |
 | AC-18 | Revocable read-only share link | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 21 implemented the whole criterion.** An operator issues a `hmp_share_<id>_<secret>` link carrying **256 bits** of CSPRNG secret; only a SHA-256 digest and an INDEPENDENT non-secret prefix are stored, and the plaintext is returned exactly once with no recovery endpoint. The link opens in a private window with **no sign-in**, showing fleet governance state, the timeline with raw JSON drill-through, receipts and blocks — all through the SAME read stores and mappers the operator UI uses, driven by a scope derived from the share ROW. It renders **no edit controls** and authorizes **no mutation**: `ReadOnlyShareContext` carries no user, no role and no permission set. The token is POSTed once and exchanged for an HttpOnly `Path=/v1/share` cookie holding that same token, so every read re-resolves it against `revoked_at IS NULL` — revocation kills an open session on the next request, and re-pasting the original URL buys nothing. Unknown, malformed, revoked and cross-tenant all return an identical `invalid_share`. 51 route tests, 47 architecture guards. **NOT PASS:** never demonstrated in an authorized environment, and the 10 live tests proving hash-at-rest on disk and cross-tenant isolation are **SKIPPED**. |
-| AC-19 | Public demo with recurring blocks | CREDIT | `NOT STARTED` | None. |
+| AC-19 | Public demo with recurring blocks | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 22 implemented the whole criterion.** An operator toggles a workspace public and receives a slug-addressed URL that opens for **anyone, with no credential of any kind** — no account, no invitation, no token, no cookie — showing the live fleet with ledger-sourced spend against caps, the enforcement blocks, the precheck receipts and the event timeline with raw JSON drill-through, all through the **same read stores and the same row mappers** the operator UI and the AC-18 share surface use. The slug is a **public locator, not a bearer secret**: authorization is the `demo_enabled = true` predicate carried in the WHERE clause of every resolution, so a private workspace is never in the result set and a leaked former slug buys nothing. Disable is immediate and total — the flag drops and the slug is cleared in one statement, so a page already open dies on its next 15-second refresh; re-enabling issues a NEW slug and the old URL stays dead. `ReadOnlyDemoContext` carries no user, no role and no permission set and is deliberately not an `AuthorizedWorkspace`, so no mutating store will accept it; the public router is GET-only and imports no mutation store at all. Recurring blocks are produced by a **mode of the reference client** over the real machine API — register, poll, precheck, report — which cannot fabricate a block, cannot edit policy, and obeys an `allow` rather than lowering the cap to keep the demo interesting; each cycle carries a **fresh `action_id`**, without which the plane would replay the first decision forever and write no new block. 41 route tests, 39 architecture guards, 14 generator tests. The compiled API was exercised over a **real TCP socket** and the compiled generator ran **unbounded** against a fake plane enforcing precheck idempotency, producing 4 over-cap attempts with **4 distinct action ids and 4 distinct plane-written blocks**, zero replays. **NOT PASS:** never demonstrated in an authorized environment, and the 11 live tests proving the SQL predicate, the check constraint and cross-tenant isolation against real PostgreSQL are **SKIPPED**. |
 | AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `FOUNDATION ONLY` | **1555 tests, 44 files.** Step 4 added the workspace-scoped repository layer: every tenant-owned query is proven to emit `workspace_id` in its predicate against real compiled SQL (37 assertions), no bypass helper exists, and ESLint blocks raw table access from apps. A live cross-tenant suite exists and exercises two tenants sharing identical `event_id` and `external_id` values — but it is **SKIPPED**, gated on an authorized `TEST_DATABASE_URL` that does not exist. **Real PostgreSQL isolation is therefore unproven at runtime**, and most Credit feature paths still do not exist to be covered. |
 | AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
 
@@ -590,17 +590,17 @@ resolver picking the wrong row would still have looked correct. A test where
 both tenants hold links, issued in the "wrong" order, now makes that probe
 fail.
 
-## Summary at Step 21
+## Summary at Step 22
 
 - `PASS`: **0**
-- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **13** (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13, AC-18)
+- `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **14** (AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12, AC-13, AC-18, AC-19)
 - `IMPLEMENTED PARTIAL`: **0**
 - `FOUNDATION` / `FOUNDATION ONLY`: **1** (AC-20)
 - `BLOCKED`: **1** (AC-21)
-- `NOT STARTED`: **1** (AC-19)
+- `NOT STARTED`: **0**
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-13 + 0 + 1 + 1 + 1 + 5 = 21.
+14 + 0 + 1 + 1 + 0 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
 Resend and Render.
@@ -628,7 +628,18 @@ What has never happened is any of it running against a real database or a real
 staging deployment. Thirteen criteria are code-complete and blocked on exactly
 one thing.
 
-**Only AC-19 (the public demo) remains unstarted in the Credit phase.**
+**No Credit-phase criterion remains unstarted.** AC-19 was the last, and Step
+22 implemented it. Everything the Credit phase asks for now exists as code.
+
+What that sentence does **not** mean: the number of criteria that have been
+demonstrated is still **zero**, and it has been zero at every step. The gap
+between "code-complete" and "verified" has widened monotonically for eighteen
+steps and has never once narrowed. Fourteen criteria are now waiting on the
+same single unblocker — a client-owned Neon database, a Render deployment and a
+GitHub repository — and the count of skipped live tests has grown again, by 11.
+
+The remaining work is **AC-20 (staging deployment) and AC-21 (CI green on
+`main`)**, and neither is an implementation problem.
 
 ## Step 3 note: relational foundation per criterion
 

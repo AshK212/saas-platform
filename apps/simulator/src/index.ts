@@ -1,8 +1,17 @@
 import { createControlPlaneClient, ControlPlaneError, TransportError } from './client.js';
 import { ConfigError, parseArgs, resolveConfig, type SimulatorConfig } from './config.js';
+import {
+  DEFAULT_ACTIVITY_INTERVAL_MS,
+  DEFAULT_BLOCK_INTERVAL_MS,
+  MIN_ACTIVITY_INTERVAL_MS,
+  MIN_BLOCK_INTERVAL_MS,
+  readIntervalMs,
+  runDemoGenerator,
+} from './demo-generator.js';
 import { createIdFactory } from './ids.js';
 import { createLogger, type Logger } from './logging.js';
 import { createRuntime } from './runtime.js';
+import { sleep } from './sleep.js';
 import {
   registerFleet,
   runBaseline,
@@ -43,6 +52,7 @@ const SCENARIOS = [
   'pause-probe',
   'replay',
   'unprechecked-spend',
+  'demo',
 ] as const;
 
 type Scenario = (typeof SCENARIOS)[number];
@@ -67,6 +77,7 @@ Scenarios
   pause-probe          agent-a acts while paused                 (AC-12)
   replay               submit one batch twice, byte-identical    (AC-13)
   unprechecked-spend   report spend with no precheck             (Step 19)
+  demo                 recurring public-demo activity + blocks   (AC-19)
 
 Flags
   --api-url <url>        overrides CONTROL_PLANE_URL
@@ -74,7 +85,16 @@ Flags
   --tick-interval <ms>   stream activity cadence (default 5000)
   --timeout <ms>         per-request timeout (default 10000)
   --run-id <id>          pin the id namespace, for reproducible runs
-  --cycles <n>           stream only: stop after N cycles
+  --cycles <n>           stream/demo only: stop after N cycles
+  --block-interval <ms>  demo only: over-cap attempt cadence (default 180000)
+
+Demo generator environment
+  DEMO_GENERATOR_INTERVAL_MS   activity cadence (default 20000)
+  DEMO_BLOCK_INTERVAL_MS       over-cap cadence (default 180000)
+
+Recurring blocks require an operator to have set agent-a to budgeted with a
+daily spend cap below $41, through the normal policy UI. The generator holds
+machine authority only and cannot configure that itself.
 
 The API key is read from the environment ONLY. There is no --api-key flag, so
 it never reaches shell history or a process listing.
@@ -177,18 +197,8 @@ async function runStream(
     if (signal.aborted || (maxCycles !== undefined && cycle >= maxCycles)) {
       break;
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, config.tickIntervalMs);
-      timer.unref?.();
-      signal.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
-    });
+    // Shared with the demo generator. NOT unref'd - see sleep.ts.
+    await sleep(config.tickIntervalMs, signal);
   }
 
   log.info(`Stream finished after ${String(cycle)} cycle(s).`);
@@ -246,6 +256,43 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
 
   try {
     await registerFleet(deps);
+
+    if (scenario === 'demo') {
+      let fatal: Error | undefined;
+      polling = startPolicyPolling(client, log, config.pollIntervalMs, (error) => {
+        fatal = error;
+        controller.abort();
+      });
+
+      const rawCycles = flags['cycles'];
+      const maxCycles =
+        rawCycles === undefined || !/^[0-9]{1,6}$/.test(rawCycles)
+          ? undefined
+          : Number.parseInt(rawCycles, 10);
+
+      await runDemoGenerator({
+        deps,
+        activityIntervalMs: readIntervalMs(
+          flags['tick-interval'] ?? env['DEMO_GENERATOR_INTERVAL_MS'],
+          DEFAULT_ACTIVITY_INTERVAL_MS,
+          MIN_ACTIVITY_INTERVAL_MS,
+        ),
+        blockIntervalMs: readIntervalMs(
+          flags['block-interval'] ?? env['DEMO_BLOCK_INTERVAL_MS'],
+          DEFAULT_BLOCK_INTERVAL_MS,
+          MIN_BLOCK_INTERVAL_MS,
+        ),
+        signal: controller.signal,
+        maxCycles,
+      });
+
+      // A rejected credential is fatal: retrying forever against a key the
+      // plane will never accept is noise, not resilience.
+      if (fatal !== undefined) {
+        throw fatal;
+      }
+      return EXIT_OK;
+    }
 
     if (scenario === 'stream') {
       let fatal: Error | undefined;

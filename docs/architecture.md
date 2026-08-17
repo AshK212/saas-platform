@@ -199,6 +199,39 @@ confirm the workspace exists and turn the endpoint into an enumeration oracle.
 
 Full reasoning: [ADR 0003 — Operator Workspace Authorization](adr/0003-operator-workspace-authorization.md).
 
+### The four read authorities (Steps 6, 7, 21, 22)
+
+Four different callers can end up holding a `WorkspaceScope`. Their inputs
+differ completely; the shape of the resolution does not.
+
+| Authority | Input | Scope derived from | Added |
+| --- | --- | --- | --- |
+| Operator session | session cookie | membership row | Step 6 |
+| Machine credential | `Authorization: Bearer` | `api_credentials` row | Step 7 |
+| Share token | exchanged token → scoped cookie | `workspace_shares` row | Step 21 |
+| Public demo | slug in the path | `workspaces` row + `demo_enabled` | Step 22 |
+
+> **In every one of the four, the scope comes from a row the SERVER matched —
+> never from request input.** That is the single property that makes tenant
+> isolation an invariant rather than a habit, and it is why a new read surface
+> can be added without re-arguing isolation each time.
+
+The three non-operator authorities are progressively weaker, and the type system
+carries the difference rather than a comment. A machine credential authorizes
+four routes. `ReadOnlyShareContext` and `ReadOnlyDemoContext` carry **no user,
+no role and no permission set**, and neither is an `AuthorizedWorkspace` — so
+they cannot be passed to a mutating store, because every mutating store requires
+one. "A demo visitor writes something" is not a bug that was tested for and
+found absent; it is a sentence that does not typecheck.
+
+The two public surfaces differ in one respect that matters. A **share token is a
+bearer secret** — 256 bits, hashed at rest, shown once, kept out of URLs. A
+**demo slug is a public locator** — it is meant to be printed in a deck, so it
+is stored in plaintext and appears in the path, and the authorization is the
+`demo_enabled` predicate in the resolving statement instead. Applying the token
+discipline to a slug would be ceremony; applying the slug reasoning to a token
+would be a breach. See [sharing.md](sharing.md) and [demo.md](demo.md).
+
 ### Application-layer scoping (Step 4)
 
 Tenant-owned data is reachable only through workspace-bound repositories:

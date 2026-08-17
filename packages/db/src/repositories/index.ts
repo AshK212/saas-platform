@@ -121,3 +121,5 @@ export type {
   ShareTokenRepository,
   ShareTokenRow,
 } from './share-tokens.js';
+export { createDemoSettingsRepository, demoSettingsQueries } from './demo-settings.js';
+export type { DemoSettingsRepository, DemoSettingsRow } from './demo-settings.js';

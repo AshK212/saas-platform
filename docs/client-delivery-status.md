@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-14** (Step 21 — revocable read-only sharing).
+Last updated: **2026-08-16** (Step 22 — public demo mode).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -186,19 +186,39 @@ confirmed against a real client-owned Neon project:
   had. **A public, unauthenticated read surface has never been exercised
   against a real database.**
 
+- the **eleven Step 22 live demo tests**, currently **skipped**. Three claims
+  can only be established against PostgreSQL: that `demo_enabled` really is a
+  predicate in the resolving statement rather than a check applied afterwards,
+  that the schema constraint really forbids a slug on a private workspace (so
+  disabling truly orphans the URL), and that the workspace predicate really
+  hides another tenant's fleet, receipts and blocks from a demo scope. **A
+  surface that anyone on the internet can open has never been exercised against
+  a real database.**
+
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Thirteen criteria are now code-complete and blocked only on environment**
-(AC-01, AC-02, AC-03, AC-04, AC-05, AC-06, AC-07, AC-08, AC-10, AC-11, AC-12,
-AC-13, AC-18) —
-every Credit-phase enforcement criterion among them. That queue has grown at
-every step since Step 5, and each addition increases the chance that the first
-real run against Neon surfaces several problems at once rather than one at a
-time. **This is now the entire remaining risk on the Credit phase**, and it is
-no longer offset by remaining implementation work: the enforcement path is
-finished end to end and has never executed against a real database.
+**Fourteen criteria are now code-complete and blocked only on environment**
+(AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19) — every Credit-phase criterion
+except AC-20 (staging) and AC-21 (CI), neither of which is an implementation
+problem. **No Credit criterion remains unstarted.**
+
+That should not read as reassurance. The queue has grown at every step since
+Step 5 and has never once shrunk, and each addition increases the chance that
+the first real run against Neon surfaces several problems at once rather than
+one at a time. **This is now the entire remaining risk on the Credit phase**,
+and it is no longer offset by remaining implementation work: the feature set is
+finished and none of it has executed against a real database.
+
+Step 22 supplies a concrete illustration of why local test suites are not a
+substitute. The demo generator is a process designed to run for days. Its unit
+tests passed, its guards passed, and the compiled binary **exited cleanly after
+one cycle** because an `unref`'d timer left nothing holding the event loop
+open. No amount of in-process testing could see it; running the built artifact
+the way it deploys found it in one attempt. Fourteen criteria are waiting on an
+environment that would surface that class of defect, and that environment does
+not exist.
 
 Local structural validation passes. That is **not** production Neon validation
 and is not reported as such.

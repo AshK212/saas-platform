@@ -11,6 +11,9 @@ import { createAgentPolicyRoutes } from './routes/agent-policy.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createGovernanceRoutes } from './routes/governance.js';
 import type { ShareManagementStore, ShareResolverStore } from './share/store.js';
+import { createDemoManagementRoutes } from './routes/demo-management.js';
+import { createDemoPublicRoutes } from './routes/demo-public.js';
+import type { DemoManagementStore, DemoResolverStore } from './demo/store.js';
 import { createShareManagementRoutes } from './routes/share-management.js';
 import { createSharePublicRoutes } from './routes/share-public.js';
 import type { GovernanceReadStore } from './governance/read-store.js';
@@ -131,6 +134,10 @@ export interface AppDependencies {
   readonly shareManagementStore?: ShareManagementStore | undefined;
   /** Resolves a presented share token to a read-only authority. */
   readonly shareResolverStore?: ShareResolverStore | undefined;
+  /** Operator-only public-demo enable/disable. */
+  readonly demoManagementStore?: DemoManagementStore | undefined;
+  /** Resolves a public demo slug to a read-only authority. */
+  readonly demoResolverStore?: DemoResolverStore | undefined;
 
   /** Time source. Injectable so credential tests can control timestamps. */
   readonly clock?: Clock;
@@ -146,11 +153,17 @@ export interface AppDependencies {
  * operator event TIMELINE and raw detail, machine policy POLLING, operator
  * policy MUTATION, the PRECHECK decision engine with durable receipts and
  * plane-owned blocks, and operator GOVERNANCE VISIBILITY - fleet enforcement
- * state, receipt detail and block detail.
+ * state, receipt detail and block detail - plus event-driven ledger DEBIT for
+ * unprechecked spend (Step 19), revocable read-only SHARING (Step 21) and
+ * PUBLIC DEMO mode (Step 22).
  *
- * Event-driven ledger debit (Step 19), email alerts, exports, rollups, sharing
- * and demo are intentionally absent. Exactly one route writes policy, and it
- * requires a browser session and the `operator` role.
+ * Email alerts, exports, rollups and gone-dark detection are intentionally
+ * absent.
+ *
+ * Four authorities can reach a workspace read: an operator session, a machine
+ * credential, a share token and a public demo slug. Only the first can write
+ * anything. Exactly one route writes policy, and it requires a browser session
+ * and the `operator` role.
  */
 export function createApp(dependencies: AppDependencies): Hono {
   const app = new Hono();
@@ -288,6 +301,26 @@ export function createApp(dependencies: AppDependencies): Hono {
       eventReadStore: dependencies.eventReadStore,
       governanceReadStore: dependencies.governanceReadStore,
       secureCookies: dependencies.secureCookies ?? false,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  app.route(
+    '/',
+    createDemoManagementRoutes({
+      demoManagementStore: dependencies.demoManagementStore,
+      workspaceStore: dependencies.workspaceStore,
+      authService: dependencies.authService,
+      clock: dependencies.clock ?? systemClock,
+    }),
+  );
+  // The PUBLIC demo surface. Same read stores as the operator routes; only the
+  // authority differs, and it requires no credential at all.
+  app.route(
+    '/',
+    createDemoPublicRoutes({
+      demoResolverStore: dependencies.demoResolverStore,
+      eventReadStore: dependencies.eventReadStore,
+      governanceReadStore: dependencies.governanceReadStore,
       clock: dependencies.clock ?? systemClock,
     }),
   );

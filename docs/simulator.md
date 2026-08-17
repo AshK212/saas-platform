@@ -53,6 +53,7 @@ source. Build first with `pnpm build:simulator` (or `pnpm build`).
 | `pause-probe` | agent-a acts while paused — AC-12 |
 | `replay` | submit one batch twice, byte-identical — AC-13 |
 | `unprechecked-spend` | report spend with no precheck — Step 19 |
+| `demo` | recurring public-demo activity with a real block every few minutes — AC-19 |
 
 ### Flags
 
@@ -63,7 +64,8 @@ source. Build first with `pnpm build:simulator` (or `pnpm build`).
 | `--tick-interval <ms>` | `5000` | `stream` activity cadence |
 | `--timeout <ms>` | `10000` | per-request timeout |
 | `--run-id <id>` | random | pins the id namespace for a reproducible run |
-| `--cycles <n>` | unbounded | `stream` only |
+| `--cycles <n>` | unbounded | `stream` and `demo` |
+| `--block-interval <ms>` | `180000` | `demo` only; over-cap attempt cadence |
 
 ## The API key
 
@@ -197,13 +199,62 @@ asks.
 Expected: `accepted 3, duplicates 0` then `accepted 0, duplicates 3`, with the
 stored event count unchanged.
 
+## The `demo` scenario
+
+The only unbounded scenario besides `stream`, and the only one that exists to
+feed something a stranger will look at. Full treatment in [demo.md](demo.md);
+what matters here is what it does **not** get to do.
+
+It is the same client with the same single workspace API key. It cannot set a
+cap, pause an agent, or turn the public demo on or off, so the recurring blocks
+it produces are genuine refusals decided by the server — not a script printing
+the word "denied". If an operator raises the cap and the over-cap attempt
+starts being **allowed**, the generator reports the spend and says so. It does
+not lower the cap to keep the demo interesting.
+
+The one thing it must get right is identity. `action_id` is the precheck
+idempotency key, so **every block cycle uses a new ordinal**. Reusing one would
+replay the first decision forever: the plane would hand back the original
+receipt, write no new block, and every log line would still look healthy. That
+is the inverse of the retry rule two sections above — an *uncertain* attempt
+reuses its id precisely so it cannot double-charge, and a *new* attempt must
+not.
+
+## A defect this documentation exists to remember
+
+Every long-running scenario waits between cycles. That wait used to `unref`
+its timer, on the reasoning that a pending timer should never keep the process
+alive after a shutdown signal. The reasoning was right; the mechanism was wrong.
+
+`unref` does not mean "do not linger after abort" — it means "do not count
+toward keeping Node running at all". While a scenario waits it holds no other
+referenced handle: the HTTP requests have completed, and the policy poller is
+deliberately unref'd because a background poller should not by itself keep the
+process up. So the first time a loop awaited that sleep, Node found nothing
+referenced and **exited 0** — after a single cycle, with no error, looking
+exactly like a clean finish.
+
+Nothing caught it. The unit tests inject an instant `sleep` and a `maxCycles`
+bound, so they never touch the real timer. It was visible only by running the
+**compiled binary unbounded**, the way it is actually deployed — which is why
+that run is now part of the validation routine and not an afterthought.
+
+`stream` had it too, from Step 20. Both now share `src/sleep.ts`, which does
+not unref, still resolves the instant the signal aborts (measured: 58 ms
+against a 120-second interval), and removes its abort listener so a process
+meant to run for days does not accumulate one per cycle. Five tests pin it, and
+re-introducing the `unref` fails two of them.
+
 ## Verification status
 
 | | |
 | --- | --- |
 | Reference-client tests | 25, against a **real HTTP socket** |
+| Demo-generator tests | 14 |
+| Sleep regression tests | 5 |
 | Architecture guards | 30 |
 | Compiled CLI | exercised against a local fake control plane |
+| Compiled `demo`, unbounded | 4 over-cap attempts → 4 distinct action ids → 4 plane-written blocks, 0 replays |
 | **Staging** | **BLOCKED** |
 
 **AC-03 is `IMPLEMENTED / STAGING VERIFICATION BLOCKED`, not PASS.** The

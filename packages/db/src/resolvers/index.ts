@@ -34,3 +34,5 @@ export { findDemoWorkspaceBySlug, findWorkspaceById } from './workspaces.js';
 export type { WorkspaceRow } from './workspaces.js';
 export { resolveShareToken } from './share-tokens.js';
 export type { ResolvedShareToken } from './share-tokens.js';
+export { resolvePublicDemo } from './demo.js';
+export type { ResolvedDemoWorkspace } from './demo.js';

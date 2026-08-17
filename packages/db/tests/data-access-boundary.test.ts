@@ -272,6 +272,9 @@ describe('every repository source file scopes its queries', () => {
     'policy-mutation.ts',
     'receipts.ts',
     'share-tokens.ts',
+    // AC-19: flips `demo_enabled` and assigns/clears the public slug. The
+    // only writer of either column.
+    'demo-settings.ts',
   ];
 
   /**
@@ -384,6 +387,7 @@ describe('resolvers are the only unscoped reads, and stay bounded', () => {
       // Discovers a workspace from a presented share token. Cannot take a
       // scope, because producing one is its purpose - the AC-18 analogue of
       // credential resolution.
+      'resolvePublicDemo',
       'resolveShareToken',
     ]);
   });

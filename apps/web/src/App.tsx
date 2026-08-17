@@ -8,6 +8,7 @@ import {
 import { useCallback, useEffect, useState, type JSX } from 'react';
 
 import { fetchCurrentUser, logout } from './api';
+import { DemoView } from './DemoView';
 import { SharedView } from './SharedView';
 import { SignIn } from './SignIn';
 import { Workspaces } from './Workspaces';
@@ -82,9 +83,25 @@ function readShareToken(): string | null {
   return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
 }
 
+/**
+ * Reads a public demo slug from `/demo/<slug>`.
+ *
+ * Read once during initialisation, before any authenticated request. A public
+ * demo must render for a visitor with no session, so the shell must not try to
+ * sign anyone in first.
+ *
+ * Unlike a share token this is NOT stripped from the URL: the slug is public
+ * by design and a bookmarkable address is the point.
+ */
+function readDemoSlug(): string | null {
+  const match = /^\/demo\/([^/?#]+)/.exec(window.location.pathname);
+  return match?.[1] === undefined ? null : decodeURIComponent(match[1]);
+}
+
 export function App(): JSX.Element {
   // Captured before anything else: the SharedView strips it from the URL.
   const [shareToken] = useState(readShareToken);
+  const [demoSlug] = useState(readDemoSlug);
   const [auth, setAuth] = useState<AuthState>({ status: 'loading' });
   const callbackResult = useCallbackResult();
 
@@ -120,6 +137,11 @@ export function App(): JSX.Element {
   // page renders with no login and no operator chrome whatsoever.
   if (shareToken !== null) {
     return <SharedView token={shareToken} />;
+  }
+
+  // THE PUBLIC DEMO. Also returned before any session is consulted.
+  if (demoSlug !== null) {
+    return <DemoView slug={demoSlug} />;
   }
 
   return (
