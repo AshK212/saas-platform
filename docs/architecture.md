@@ -232,6 +232,10 @@ is stored in plaintext and appears in the path, and the authorization is the
 discipline to a slug would be ceremony; applying the slug reasoning to a token
 would be a breach. See [sharing.md](sharing.md) and [demo.md](demo.md).
 
+The full cross-tenant argument - what each of the three evidence layers proves,
+which database constraints back it up, and which of them has never run - is
+[tenant-isolation.md](tenant-isolation.md).
+
 ### Application-layer scoping (Step 4)
 
 Tenant-owned data is reachable only through workspace-bound repositories:

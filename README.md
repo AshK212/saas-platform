@@ -285,6 +285,7 @@ behind that prefix.
 - [Governance visibility](docs/governance-visibility.md) — fleet enforcement state, receipt and block audit, and why nothing is recomputed
 - [Reference client](docs/simulator.md) — the documented simulator command, its scenarios, and the Credit walkthrough
 - [Read-only sharing](docs/sharing.md) — share-token format, hash-at-rest, the one-time exchange, and revocation
+- [Cross-tenant isolation](docs/tenant-isolation.md) — the four read authorities, the three layers of AC-20 evidence, database defence in depth, and mutation-test results
 - [Public demo mode](docs/demo.md) — the fourth read authority, why the slug is a locator and not a secret, and how recurring blocks are produced through the real path
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)
 - [Database](docs/database.md) — driver choice, transactions, migrations, readiness

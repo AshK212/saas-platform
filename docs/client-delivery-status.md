@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-16** (Step 22 — public demo mode).
+Last updated: **2026-08-16** (Step 23 — AC-20 cross-tenant isolation acceptance).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -195,14 +195,24 @@ confirmed against a real client-owned Neon project:
   surface that anyone on the internet can open has never been exercised against
   a real database.**
 
+- the **twenty-three Step 23 live cross-tenant tests**, currently **skipped**.
+  These are the AC-20 acceptance itself, and they are the only tests that can
+  observe PostgreSQL REFUSING something: a workspace-scoped unique constraint
+  that lets two tenants share an `action_id` while still rejecting a duplicate
+  inside one; a composite foreign key refusing an event, ledger row, receipt,
+  block or policy in A that points at an agent in B; the ledger primary key
+  `(workspace_id, agent_id, day)`; and the CHECK constraint that forbids a demo
+  slug on a private workspace. **Every database-level tenant defence in the
+  system is argued and unrun.**
+
 Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Fourteen criteria are now code-complete and blocked only on environment**
-(AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19) — every Credit-phase criterion
-except AC-20 (staging) and AC-21 (CI), neither of which is an implementation
-problem. **No Credit criterion remains unstarted.**
+**Fifteen criteria are now code-complete and blocked only on environment**
+(AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19, AC-20) — every Credit-phase
+criterion except AC-21 (CI), which is not an implementation problem either.
+**No Credit criterion remains unstarted.**
 
 That should not read as reassurance. The queue has grown at every step since
 Step 5 and has never once shrunk, and each addition increases the chance that
@@ -210,6 +220,16 @@ the first real run against Neon surfaces several problems at once rather than
 one at a time. **This is now the entire remaining risk on the Credit phase**,
 and it is no longer offset by remaining implementation work: the feature set is
 finished and none of it has executed against a real database.
+
+Step 23 makes the shape of the risk unusually explicit. Cross-tenant isolation
+is now asserted in three layers, and the project can state exactly which layer
+proves what: that each surface derives its scope from the right authority
+(111 tests, passing); that every query carries `workspace_id` as a bound
+parameter (172 tests, passing); and that PostgreSQL itself refuses a
+cross-tenant row (23 tests, **never executed**). The first two are arguments
+about code. Only the third is evidence about the database, and a client asking
+"has anyone proved my data cannot leak into another tenant's workspace" is
+asking about the third.
 
 Step 22 supplies a concrete illustration of why local test suites are not a
 substitute. The demo generator is a process designed to run for days. Its unit
