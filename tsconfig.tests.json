@@ -12,5 +12,5 @@
     "moduleResolution": "Bundler",
     "types": ["node"]
   },
-  "include": ["apps/*/tests/**/*.ts", "packages/*/tests/**/*.ts", "vitest.config.ts"]
+  "include": ["apps/*/tests/**/*.ts", "packages/*/tests/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.live.config.ts", "vitest.live.ci.config.ts"]
 }

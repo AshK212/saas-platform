@@ -11,6 +11,8 @@ build/
 # --- Test / coverage output ---
 coverage/
 .vitest/
+# Machine-readable live-suite report, consumed by scripts/check-live-coverage.mjs.
+.vitest-live-report.json
 
 # --- Environment & secrets ---
 # .env.example is intentionally tracked; every other env file is local-only.

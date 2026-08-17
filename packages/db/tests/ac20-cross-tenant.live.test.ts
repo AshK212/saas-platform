@@ -91,6 +91,67 @@ const scopeB = createWorkspaceScope(WS_B);
 /** Forces a rollback without failing the test. */
 class Rollback extends Error {}
 
+/**
+ * PostgreSQL error classes this suite asserts on.
+ *
+ * ─── WHY THE CODE AND NOT JUST "IT THREW" ─────────────────────────────────
+ *
+ * `await expect(insert).rejects.toThrow()` is satisfied by ANY error. That
+ * includes the one error every one of these tests would hit if the database
+ * were simply unreachable - and it was: pointing the suite at a closed port
+ * made a cross-tenant foreign-key test PASS, because `ECONNREFUSED` is a
+ * throw too.
+ *
+ * A constraint test that passes when there is no database is not a constraint
+ * test. It is also satisfied by a typo in the INSERT, a renamed column, or a
+ * NOT NULL violation on an unrelated field - so it could report "the composite
+ * foreign key protects us" while the foreign key had been dropped.
+ *
+ * Asserting the SQLSTATE fixes all of that at once: 23503 means the FK refused
+ * the row, and nothing else does.
+ */
+const PG = {
+  uniqueViolation: '23505',
+  foreignKeyViolation: '23503',
+  checkViolation: '23514',
+} as const;
+
+/** Digs the SQLSTATE out of an error, following `cause` if a driver wrapped it. */
+function sqlState(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) {
+      return code;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
+ * Asserts that `work` is refused by PostgreSQL with a specific SQLSTATE.
+ *
+ * @param expected - one of `PG`, so the test names the constraint class it
+ *   relies on rather than accepting any failure.
+ */
+async function expectRefused(work: () => Promise<unknown>, expected: string): Promise<void> {
+  let caught: unknown;
+  try {
+    await work();
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught, 'expected PostgreSQL to refuse this statement').toBeDefined();
+  expect(
+    sqlState(caught),
+    `expected SQLSTATE ${expected}, got: ${
+      caught instanceof Error ? caught.message : String(caught)
+    }`,
+  ).toBe(expected);
+}
+
 let pool: ReturnType<typeof createDatabasePool> | undefined;
 
 afterAll(async () => {
@@ -282,8 +343,9 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     // The other half of a workspace-scoped unique constraint. Without this,
     // "both tenants can hold act-shared-001" might simply mean the constraint
     // is gone, and idempotency would be broken rather than scoped.
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx.insert(precheckReceipts).values({
           workspaceId: WS_A,
@@ -294,13 +356,15 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           policyVersion: 1,
           appliedMode: 'budgeted',
         });
-      }),
-    ).rejects.toThrow();
+        }),
+      PG.uniqueViolation,
+    );
   });
 
   it('a duplicate event_id inside one tenant is refused', async () => {
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx.insert(events).values({
           workspaceId: WS_A,
@@ -309,13 +373,15 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           type: 'heartbeat',
           payload: {},
         });
-      }),
-    ).rejects.toThrow();
+        }),
+      PG.uniqueViolation,
+    );
   });
 
   it('a duplicate external block id inside one tenant is refused', async () => {
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx.insert(blocks).values({
           workspaceId: WS_A,
@@ -326,19 +392,22 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           rule: 'daily_spend_cap',
           reason: 'again',
         });
-      }),
-    ).rejects.toThrow();
+        }),
+      PG.uniqueViolation,
+    );
   });
 
   it('a duplicate agent external id inside one tenant is refused', async () => {
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx
           .insert(agents)
           .values({ workspaceId: WS_A, externalId: SHARED_AGENT_EXTERNAL_ID });
-      }),
-    ).rejects.toThrow();
+        }),
+      PG.uniqueViolation,
+    );
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -479,12 +548,15 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
   it.each(CROSS_TENANT_INSERTS)('PostgreSQL refuses $name', async ({ insert }) => {
     // The last line of defence. Even with every WHERE clause removed, these
     // rows cannot exist, because the composite key names the workspace.
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await insert(tx);
-      }),
-    ).rejects.toThrow();
+        }),
+      // A composite FK refusing the row - not a unique clash, not any other error.
+      PG.foreignKeyViolation,
+    );
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -540,12 +612,15 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
   });
 
   it('the ledger primary key refuses a second row for the same workspace, agent and day', async () => {
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx.insert(ledgerDaily).values({ workspaceId: WS_A, agentId: AGENT_A, day: DAY });
-      }),
-    ).rejects.toThrow();
+        }),
+      // The composite PRIMARY KEY (workspace_id, agent_id, day).
+      PG.uniqueViolation,
+    );
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -597,20 +672,24 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
   it('the CHECK constraint forbids a slug on a private workspace', async () => {
     // This is what makes "disable" total: the slug cannot survive the flag, so
     // a former demo URL cannot be left addressable in the table.
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx
           .update(workspaces)
           .set({ demoEnabled: false, demoSlug: 'orphaned-abcd1234' })
           .where(inArray(workspaces.id, [WS_A]));
-      }),
-    ).rejects.toThrow();
+        }),
+      // workspaces_demo_slug_requires_demo_check, specifically.
+      PG.checkViolation,
+    );
   });
 
   it('a demo slug is globally unique, so two tenants cannot claim one address', async () => {
-    await expect(
-      getDb().transaction(async (tx) => {
+    await expectRefused(
+      () =>
+        getDb().transaction(async (tx) => {
         await seedBothTenants(tx);
         await tx
           .update(workspaces)
@@ -620,8 +699,9 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           .update(workspaces)
           .set({ demoEnabled: true, demoSlug: 'contested-abcd1234' })
           .where(inArray(workspaces.id, [WS_B]));
-      }),
-    ).rejects.toThrow();
+        }),
+      PG.uniqueViolation,
+    );
   });
 
   // ─────────────────────────────────────────────────────────────────────────

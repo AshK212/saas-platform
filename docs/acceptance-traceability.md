@@ -13,6 +13,7 @@ only and does not redefine any criterion.
 | `FOUNDATION ONLY` | Structural groundwork exists; the acceptance condition itself is **not** met. |
 | `BLOCKED` | Cannot progress until an external dependency is supplied. |
 | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | Feature is complete and locally tested, but its acceptance condition has never been demonstrated in an authorized environment. **This is not PASS.** |
+| `IMPLEMENTED / CLIENT GITHUB VERIFICATION BLOCKED` | Same standing, different missing resource: the artifact is complete and locally verified, but its acceptance condition can only be observed inside a client-owned GitHub repository, and none exists. **This is not PASS.** |
 | `PARTIAL` | One part of a multi-part criterion is complete; the rest is not started. **This is not PASS.** |
 | `PASS` | The acceptance condition has been demonstrated and verified. |
 | `FAIL` | The acceptance condition was exercised and did not hold. |
@@ -55,7 +56,7 @@ only and does not redefine any criterion.
 | AC-18 | Revocable read-only share link | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 21 implemented the whole criterion.** An operator issues a `hmp_share_<id>_<secret>` link carrying **256 bits** of CSPRNG secret; only a SHA-256 digest and an INDEPENDENT non-secret prefix are stored, and the plaintext is returned exactly once with no recovery endpoint. The link opens in a private window with **no sign-in**, showing fleet governance state, the timeline with raw JSON drill-through, receipts and blocks — all through the SAME read stores and mappers the operator UI uses, driven by a scope derived from the share ROW. It renders **no edit controls** and authorizes **no mutation**: `ReadOnlyShareContext` carries no user, no role and no permission set. The token is POSTed once and exchanged for an HttpOnly `Path=/v1/share` cookie holding that same token, so every read re-resolves it against `revoked_at IS NULL` — revocation kills an open session on the next request, and re-pasting the original URL buys nothing. Unknown, malformed, revoked and cross-tenant all return an identical `invalid_share`. 51 route tests, 47 architecture guards. **NOT PASS:** never demonstrated in an authorized environment, and the 10 live tests proving hash-at-rest on disk and cross-tenant isolation are **SKIPPED**. |
 | AC-19 | Public demo with recurring blocks | CREDIT | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 22 implemented the whole criterion.** An operator toggles a workspace public and receives a slug-addressed URL that opens for **anyone, with no credential of any kind** — no account, no invitation, no token, no cookie — showing the live fleet with ledger-sourced spend against caps, the enforcement blocks, the precheck receipts and the event timeline with raw JSON drill-through, all through the **same read stores and the same row mappers** the operator UI and the AC-18 share surface use. The slug is a **public locator, not a bearer secret**: authorization is the `demo_enabled = true` predicate carried in the WHERE clause of every resolution, so a private workspace is never in the result set and a leaked former slug buys nothing. Disable is immediate and total — the flag drops and the slug is cleared in one statement, so a page already open dies on its next 15-second refresh; re-enabling issues a NEW slug and the old URL stays dead. `ReadOnlyDemoContext` carries no user, no role and no permission set and is deliberately not an `AuthorizedWorkspace`, so no mutating store will accept it; the public router is GET-only and imports no mutation store at all. Recurring blocks are produced by a **mode of the reference client** over the real machine API — register, poll, precheck, report — which cannot fabricate a block, cannot edit policy, and obeys an `allow` rather than lowering the cap to keep the demo interesting; each cycle carries a **fresh `action_id`**, without which the plane would replay the first decision forever and write no new block. 41 route tests, 39 architecture guards, 14 generator tests. The compiled API was exercised over a **real TCP socket** and the compiled generator ran **unbounded** against a fake plane enforcing precheck idempotency, producing 4 over-cap attempts with **4 distinct action ids and 4 distinct plane-written blocks**, zero replays. **NOT PASS:** never demonstrated in an authorized environment, and the 11 live tests proving the SQL predicate, the check constraint and cross-tenant isolation against real PostgreSQL are **SKIPPED**. |
 | AC-20 | Automated cross-tenant coverage | CREDIT — foundation | `IMPLEMENTED / STAGING VERIFICATION BLOCKED` | **Step 23 built the comprehensive suite.** A single application with all fourteen stores mounted drives TWO workspaces whose external identifiers collide on purpose - the same `agent-1`, `evt-shared-001`, `act-shared-001` and `blk-shared-001` in both - so a missing workspace predicate returns the WRONG TENANT'S ROW rather than nothing. Both tenants are also given different governance ($25 vs $99 caps, versions 1 vs 7, a `deny` vs an `allow` on the shared action), so a leak changes an enforcement decision and not merely a privacy boundary. Every one of B's internal UUIDs - agent, event, receipt, block, share, workspace - is captured and fed back through each of A's four authorities. **Three layers, three separate claims:** 111 HTTP tests prove every surface derives its scope from the right authority and never from a body, query string, header or path; 172 compiled-SQL tests prove EVERY tenant-owned query in the package carries `workspace_id` as a bound parameter, with a guard that fails if a new query builder appears uncovered; 23 live PostgreSQL tests would prove the database itself refuses cross-tenant rows. Authority confusion is tested explicitly - an API key cannot mutate policy or read operator history even for its own workspace, a session cannot ingest or precheck, a share cookie reaches no operator or machine route, and NO non-GET route exists under any public prefix (asserted by interrogating the router, not by probing known paths). 28 authority checks also ran against the COMPILED build over a real TCP socket. Eleven mutation probes were applied and reverted; each failed as intended, and one exposed a genuine gap in the new suite that was then closed. Full detail in [tenant-isolation.md](tenant-isolation.md). **NOT PASS:** the 23 live tests are **SKIPPED** for want of a `TEST_DATABASE_URL`, so every workspace-scoped unique constraint, every composite foreign key, the ledger primary key and the demo CHECK constraint remain argued and unrun. AC-20 asks for an automated cross-tenant test that PASSES, and one third of it has never executed. |
-| AC-21 | CI green on `main` | CREDIT | `BLOCKED` | A GitHub Actions workflow (`.github/workflows/ci.yml`) is committed and its exact command sequence passes locally. **No GitHub repository, no remote, and no CI run exist**, so this criterion cannot be evaluated. It may only become `PASS` after a real green run on `main`. |
+| AC-21 | CI green on `main` | CREDIT | `IMPLEMENTED / CLIENT GITHUB VERIFICATION BLOCKED` | **Step 24 built the gate.** One workflow, two jobs. `verify` runs the repository's own canonical `pnpm verify` (lint, typecheck, the whole 2528-test in-process suite, production builds of API, web and simulator) plus TWO schema checks that are not redundant: `db:check` validates the migration journal's internal consistency, and the new `db:drift` runs the generator and fails if anything changed - catching a schema edit whose migration was never generated, which `db:check` structurally cannot see. `integration` starts a **disposable PostgreSQL 17 service** and runs the live suites against it, which is the first time this project has had any way to execute the 236 live tests - including the AC-20 cross-tenant acceptance. Reproducibility is total: Node from `.nvmrc` (20.20.2), pnpm from `packageManager` (10.34.5), a pinned Postgres major, `--frozen-lockfile` in both jobs, and only first-party actions. **`DATABASE_URL` is scoped to the migration STEP alone**, so the live-test step's environment contains only `TEST_DATABASE_URL` and the never-fall-back invariant is literally true rather than intended. A green job that ran nothing is treated as the primary hazard: `test:db:ci` hands the run's counts to `scripts/check-live-coverage.mjs`, which fails on any skip, an empty collection, zero passes, or `CI` set without a database - because "236 skipped" exits 0 and would otherwise be indistinguishable from success. Local development is unchanged: `pnpm test:db` still skips safely and no developer needs PostgreSQL for `pnpm verify`. Security posture is `contents: read` only, no `pull_request_target`, no secret of any kind, no deployment step, and no swallowed failure (`continue-on-error`, `|| true`, `if: always()` all absent). 53 contract assertions in `tests/ci-contract.test.ts` pin every one of these properties, eight of them by running the skip-detector as a subprocess; seven mutation probes were applied and reverted, each caught. Full detail in [ci.md](ci.md). **NOT PASS:** there is **no GitHub remote**, so no Actions run has ever occurred and the workflow YAML has never been parsed by GitHub. Two consequences are unproven and not claimed: the integration job has never executed (no Docker or local PostgreSQL was available), and the live suites have therefore still never run - though it WAS proven locally that the skip gate opens, since pointing `TEST_DATABASE_URL` at an unreachable host makes the suites execute and fail rather than skip. |
 
 ---
 
@@ -590,17 +591,18 @@ resolver picking the wrong row would still have looked correct. A test where
 both tenants hold links, issued in the "wrong" order, now makes that probe
 fail.
 
-## Summary at Step 23
+## Summary at Step 24
 
 - `PASS`: **0**
 - `IMPLEMENTED / STAGING VERIFICATION BLOCKED`: **15** (AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19, AC-20)
+- `IMPLEMENTED / CLIENT GITHUB VERIFICATION BLOCKED`: **1** (AC-21)
 - `IMPLEMENTED PARTIAL`: **0**
 - `FOUNDATION` / `FOUNDATION ONLY`: **0**
-- `BLOCKED`: **1** (AC-21)
+- `BLOCKED`: **0**
 - `NOT STARTED`: **0**
 - `DEFERRED`: **5** (AC-09, AC-14, AC-15, AC-16, AC-17)
 
-15 + 0 + 0 + 1 + 0 + 5 = 21.
+15 + 1 + 0 + 0 + 0 + 0 + 5 = 21.
 
 **Still zero PASS.** No criterion can be demonstrated without client-owned Neon,
 Resend and Render.
@@ -638,9 +640,20 @@ steps and has never once narrowed. Fourteen criteria are now waiting on the
 same single unblocker — a client-owned Neon database, a Render deployment and a
 GitHub repository — and the count of skipped live tests has grown again, by 11.
 
-The remaining work is **AC-21 (CI green on `main`)** and the staging
-deployment every other criterion is waiting on. Neither is an implementation
-problem.
+**Every implementation-side Credit criterion is now complete.** Sixteen of the
+sixteen non-deferred criteria have their code, their tests and their
+documentation. Nothing remains to be built.
+
+What remains is entirely environmental, and it is one thing wearing two hats: a
+client-owned GitHub repository and a client-owned Neon/Render staging
+environment. AC-21 needs the first. The other fifteen need the second.
+
+**Step 24 turned the environmental blocker into something a single external
+action resolves.** The CI pipeline now carries a disposable PostgreSQL service,
+so the 236 live tests no longer need Neon in order to execute - they need only a
+repository to run in. The first push to a client-owned remote will, in one run,
+either produce the AC-20 database evidence that fifteen criteria are waiting on,
+or tell us precisely what is wrong. Neither outcome is available today.
 
 **Step 23 completed AC-20's implementation and, in doing so, sharpened the
 statement of what is missing.** Isolation is now asserted in three layers, and
@@ -687,11 +700,33 @@ credential.
 
 ## Note on AC-21
 
-AC-21 requires CI **green on `main`**. The existence of a workflow YAML file
-does not satisfy it. The local equivalent of every CI step
-(`lint`, `typecheck`, `test`, `build`) passes on this machine, but GitHub-hosted
-execution has never occurred because no client repository has been supplied. See
-[client-delivery-status.md](client-delivery-status.md).
+AC-21 requires CI **green on `main`**. The existence of a workflow YAML file does
+not satisfy it, and Step 24 does not pretend otherwise.
+
+What Step 24 delivered is the gate itself: two jobs, a disposable PostgreSQL 17
+service, two distinct schema checks, an enforcement script that makes an
+all-skipped integration run a failure, and 53 contract assertions that stop the
+pipeline being quietly weakened later. Every command in it that is not
+GitHub-specific was executed locally and passes.
+
+Three things stand between that and PASS, and none of them is code:
+
+1. **No remote exists.** No Actions run has occurred anywhere, so "green on
+   `main`" has no referent. A developer-owned repository would not count — the
+   delivery contract places ownership with Ashir.
+2. **The workflow YAML has never been parsed by GitHub.** It is asserted to be
+   tab-free, evenly indented and structurally consistent. That is not the same
+   as accepted by Actions.
+3. **The integration job has never executed.** No Docker daemon or local
+   PostgreSQL was available on this machine. The skip gate was proven to open —
+   with `TEST_DATABASE_URL` pointed at an unreachable host the live suites
+   execute and fail rather than skip — but the disposable-service path, the
+   migration step and the 236 live tests themselves remain unrun.
+
+The first push to a client-owned repository resolves all three in a single run.
+
+See [ci.md](ci.md) for the pipeline and
+[client-delivery-status.md](client-delivery-status.md) for the obligation.
 
 ## Rerun policy
 

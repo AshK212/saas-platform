@@ -125,8 +125,29 @@ pnpm build       # tsc --build + Vite production build
 pnpm verify      # all of the above, in order, failing fast
 ```
 
-`pnpm verify` is the complete local baseline and is the exact sequence CI runs.
-It fails on any lint, type, test or build error.
+`pnpm verify` is the complete local baseline and is the exact command CI's
+static job runs. It fails on any lint, type, test or build error.
+
+Schema integrity is two separate checks, and they are not redundant:
+
+```bash
+pnpm db:check    # the migration JOURNAL is internally consistent
+pnpm db:drift    # the committed migrations MATCH the TypeScript schema
+```
+
+`db:check` cannot see a schema edit whose migration was never generated - the
+journal is untouched and therefore still consistent. `db:drift` runs the
+generator and fails if anything changed. It never commits, and it restores your
+working tree.
+
+Live PostgreSQL suites are separate and need a database:
+
+```bash
+pnpm test:db     # skips safely when TEST_DATABASE_URL is absent
+```
+
+You do **not** need PostgreSQL installed to run `pnpm verify`. CI provides the
+database - see [ci.md](docs/ci.md).
 
 ## Health and readiness
 
@@ -285,6 +306,7 @@ behind that prefix.
 - [Governance visibility](docs/governance-visibility.md) — fleet enforcement state, receipt and block audit, and why nothing is recomputed
 - [Reference client](docs/simulator.md) — the documented simulator command, its scenarios, and the Credit walkthrough
 - [Read-only sharing](docs/sharing.md) — share-token format, hash-at-rest, the one-time exchange, and revocation
+- [Continuous integration](docs/ci.md) — the two CI jobs, the disposable PostgreSQL service, why skipped is not passed, and the workflow contract tests
 - [Cross-tenant isolation](docs/tenant-isolation.md) — the four read authorities, the three layers of AC-20 evidence, database defence in depth, and mutation-test results
 - [Public demo mode](docs/demo.md) — the fourth read authority, why the slug is a locator and not a secret, and how recurring blocks are produced through the real path
 - [ADR 0001](docs/adr/0001-workspace-isolation.md) · [ADR 0002](docs/adr/0002-authentication.md) · [ADR 0003](docs/adr/0003-operator-workspace-authorization.md)

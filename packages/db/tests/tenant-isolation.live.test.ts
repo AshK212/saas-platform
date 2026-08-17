@@ -153,6 +153,17 @@ describe.skipIf(!hasTestDatabase)('live cross-tenant isolation', () => {
   it('rejects a cross-workspace foreign key at the database level', async () => {
     // Defence in depth: even if query scoping were bypassed, the composite FK
     // from Step 3 must refuse an event in A referencing an agent in B.
+    //
+    // ─── WHY THE SQLSTATE IS ASSERTED, NOT JUST "IT THREW" ────────────────
+    //
+    // This test used to end in a bare `.rejects.toThrow()`, and that is not
+    // the same claim. Pointing the suite at a closed port during Step 24 made
+    // it PASS: `ECONNREFUSED` is a throw too, so a test about a foreign key
+    // was satisfied by there being no database at all. The same assertion
+    // would also have passed on a typo in the INSERT or a NOT NULL violation
+    // on an unrelated column - while the foreign key was gone.
+    //
+    // 23503 is `foreign_key_violation` and nothing else produces it.
     const db = getDb();
 
     await expect(
@@ -174,6 +185,6 @@ describe.skipIf(!hasTestDatabase)('live cross-tenant isolation', () => {
           payload: {},
         });
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: '23503' });
   });
 });

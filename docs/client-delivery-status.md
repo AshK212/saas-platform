@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-16** (Step 23 — AC-20 cross-tenant isolation acceptance).
+Last updated: **2026-08-16** (Step 24 — AC-21 CI verification gate).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -41,6 +41,16 @@ A local Git repository has been initialized at the project root on the default
 branch `main`. **No remote is configured and none has been invented.** The
 repository must be created under Ashir's GitHub organization and that
 organization must be the owner; the local repository is then re-pointed at it.
+
+**This is now the single highest-value external action on the project.** Step 24
+completed the CI pipeline, including a disposable PostgreSQL 17 service, which
+means the 236 live database tests no longer need Neon in order to run — they need
+only a repository to run in. The first push to a client-owned remote will, in one
+run, either produce the database-level evidence that fifteen acceptance criteria
+are waiting on, or say precisely what is wrong. Neither outcome is obtainable
+today, and no local substitute exists: there is no Docker daemon and no local
+PostgreSQL on the development machine, so the integration job has never executed
+anywhere.
 
 ### 2. Project service accounts / resources: Ashir-owned
 
@@ -209,10 +219,15 @@ Separately, **AC-01 (magic-link sign-in) is implemented but cannot be
 demonstrated**: it needs a Neon database, a Resend credential with a verified
 sending domain, and a staging deployment. All three are client-owned and absent.
 
-**Fifteen criteria are now code-complete and blocked only on environment**
-(AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19, AC-20) — every Credit-phase
-criterion except AC-21 (CI), which is not an implementation problem either.
-**No Credit criterion remains unstarted.**
+**Every implementation-side Credit criterion is now complete** — all sixteen
+non-deferred criteria (AC-01 … AC-08, AC-10 … AC-13, AC-18, AC-19, AC-20, AC-21)
+have their code, their tests and their documentation. **Nothing remains to be
+built.**
+
+That sentence is not a status report on the delivery. Zero criteria have been
+demonstrated, and that has been true at every step. The entire remaining risk is
+environmental, and it now reduces to two client-owned resources: a GitHub
+repository (AC-21) and a Neon/Render staging environment (the other fifteen).
 
 That should not read as reassurance. The queue has grown at every step since
 Step 5 and has never once shrunk, and each addition increases the chance that
@@ -261,6 +276,14 @@ NOT SATISFIED — pushing is impossible without a remote.
 The daily-push obligation begins on the day the client repository is supplied.
 Work to date exists as local commits only. Local commit history does not count
 toward this requirement.
+
+Related: **AC-21 (CI green on `main`) is also gated on this item, not on any
+remaining engineering.** The workflow, its enforcement scripts and 53 contract
+assertions are complete and pass locally; what has never happened is a GitHub
+Actions run, because there is nowhere to run one. A developer-owned repository
+would not satisfy it either — this obligation places ownership with Ashir, and
+AC-21's evidence has to come from the client's own repository. See
+[ci.md](ci.md).
 
 ### 5. Staging refreshed at least every 2 business days
 

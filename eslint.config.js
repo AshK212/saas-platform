@@ -210,4 +210,22 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
+
+  // Repository CI scripts.
+  //
+  // Plain Node ESM run by `pnpm` and by GitHub Actions, never imported by the
+  // product. Their stdout IS their interface - a CI gate that failed silently
+  // would be worse than no gate - so `no-console` is off for this path rather
+  // than suppressed line by line, which would be dozens of inline disables in
+  // two files whose whole job is to report.
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: globals.node,
+      sourceType: 'module',
+    },
+    rules: {
+      'no-console': 'off',
+    },
+  },
 );

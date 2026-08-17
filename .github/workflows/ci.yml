@@ -1,31 +1,140 @@
 name: CI
 
+# AC-21 — the main-branch verification gate.
+#
+# Two jobs, because they prove two different things and one of them needs a
+# database:
+#
+#   verify       lint, typecheck, the whole in-process suite, production builds
+#                of every app, and schema/migration integrity. No credential of
+#                any kind, so it runs identically on a fork's pull request.
+#
+#   integration  the live PostgreSQL suites, against a disposable Postgres
+#                service. This is the only job that can prove the DATABASE
+#                enforces tenant isolation, exactly-once accounting and lock
+#                serialization, rather than that the code argues for it.
+#
+# No deployment happens here. There is no Render step, no Neon provisioning, no
+# production migration and no secret. AC-21 is verification only.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  # Lets an operator re-run the gate on demand during client verification,
+  # without pushing a commit to trigger it.
+  workflow_dispatch:
 
-# Cancel superseded runs on the same ref.
+# Supersede stale runs on a busy branch, but NEVER cancel a run on main: main's
+# result is the AC-21 evidence, and a cancelled run is not a green one.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Least privilege. This workflow reads code and writes nothing - no packages, no
+# releases, no OIDC identity, no comments.
 permissions:
   contents: read
 
+env:
+  CI: 'true'
+  # The accounting day is computed in UTC from the server clock and the ledger
+  # column is read in string mode, so the suites are timezone-independent by
+  # construction. Pinning UTC anyway means a future timezone-dependent defect
+  # shows up as a failure on a developer's machine rather than only in CI.
+  TZ: UTC
+
 jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Everything that needs no credential.
+  # ───────────────────────────────────────────────────────────────────────────
   verify:
-    name: Lint, typecheck, test, build
+    name: Lint, typecheck, test, build, schema
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up pnpm
-        # Version is taken from the "packageManager" field in package.json.
+        # Version comes from "packageManager" in package.json (pnpm@10.34.5).
+        # Never an arbitrary latest.
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Pinned in .nvmrc (20.20.2) and enforced by "engines". Deliberately
+          # not a floating channel: reproducibility is the point of this job.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        # --frozen-lockfile, always. A package.json edited without regenerating
+        # the lockfile must fail here rather than resolve to something new.
+        run: pnpm install --frozen-lockfile
+
+      # The repository's own canonical validation command:
+      # lint -> typecheck -> test -> build. Used as-is rather than re-listed
+      # step by step, so CI cannot drift from what a developer runs locally.
+      - name: Verify (lint, typecheck, test, build)
+        run: pnpm run verify
+
+      # Catches a schema edit whose migration was never generated. `db:check`
+      # below cannot see this: it validates the journal's internal consistency,
+      # and an ungenerated change leaves the journal untouched and consistent.
+      # Fails with the diff; never commits anything.
+      - name: Schema drift
+        run: pnpm run db:drift
+
+      # Journal integrity: ordering, hashes, no contradictory entries. Needs no
+      # database credential.
+      - name: Migration journal
+        run: pnpm run db:check
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The live database gate.
+  # ───────────────────────────────────────────────────────────────────────────
+  integration:
+    name: Live PostgreSQL suites
+    runs-on: ubuntu-latest
+    # The live suites include lock-serialization and deadlock-ordering tests. A
+    # genuine deadlock must eventually FAIL the job rather than hang a runner,
+    # and the bound is deliberately close to the real runtime so a hang is
+    # visible rather than absorbed.
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        # A pinned major. PostgreSQL 17 is the intended production target; the
+        # exact minor is whatever the tag resolves to, which is appropriate for
+        # a disposable test container. Re-pin this if the client's Neon project
+        # declares a different major - see docs/ci.md.
+        image: postgres:17
+        env:
+          # Disposable credentials for a container that lives and dies inside
+          # this job. Not secrets, not reused anywhere, never a client value.
+          POSTGRES_USER: hybrid_ci
+          POSTGRES_PASSWORD: hybrid_ci
+          POSTGRES_DB: hybrid_ci
+        ports:
+          - 5432:5432
+        # Deterministic readiness instead of a sleep. The job does not start
+        # until PostgreSQL answers, so a slow container cannot flake the run.
+        options: >-
+          --health-cmd "pg_isready -U hybrid_ci -d hybrid_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 10s
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
       - name: Set up Node
@@ -37,19 +146,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm run lint
+      # The migration runner reads DATABASE_URL by contract (it is the same
+      # command a deploy would use). That variable is scoped to THIS STEP ONLY,
+      # so it does not exist in the environment of the test step below - which
+      # keeps the "live tests never see DATABASE_URL" invariant literally true
+      # rather than merely intended.
+      - name: Apply migrations to the disposable database
+        env:
+          DATABASE_URL: postgresql://hybrid_ci:hybrid_ci@localhost:5432/hybrid_ci
+        run: pnpm run db:migrate
 
-      - name: Typecheck
-        run: pnpm run typecheck
-
-      - name: Test
-        run: pnpm run test
-
-      - name: Build
-        run: pnpm run build
-
-      # Offline consistency check of the Drizzle migration journal.
-      # Requires no database credential, so it is safe to run in CI.
-      - name: Check migrations
-        run: pnpm run db:check
+      # The live suites. TEST_DATABASE_URL is the ONLY database variable in
+      # scope here, matching the gate every live suite reads.
+      #
+      # `test:db:ci` runs the same suites as `pnpm test:db` and then asserts
+      # they actually EXECUTED. Without that assertion a job whose database
+      # never came up would print "236 skipped", exit 0, and be indistinguishable
+      # from success. See scripts/check-live-coverage.mjs.
+      - name: Live PostgreSQL tests (zero may skip)
+        env:
+          TEST_DATABASE_URL: postgresql://hybrid_ci:hybrid_ci@localhost:5432/hybrid_ci
+        run: pnpm run test:db:ci
