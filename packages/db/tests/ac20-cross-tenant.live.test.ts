@@ -19,6 +19,7 @@ import { precheckReceipts } from '../src/schema/receipts';
 import { shareTokens } from '../src/schema/sharing';
 import { workspaces } from '../src/schema/workspaces';
 import type { UtcAccountingDay } from '../src/accounting/utc-day';
+import { PG, expectRefused } from './helpers/pg-errors';
 
 /**
  * AC-20 — LIVE CROSS-TENANT ACCEPTANCE.
@@ -90,67 +91,6 @@ const scopeB = createWorkspaceScope(WS_B);
 
 /** Forces a rollback without failing the test. */
 class Rollback extends Error {}
-
-/**
- * PostgreSQL error classes this suite asserts on.
- *
- * ─── WHY THE CODE AND NOT JUST "IT THREW" ─────────────────────────────────
- *
- * `await expect(insert).rejects.toThrow()` is satisfied by ANY error. That
- * includes the one error every one of these tests would hit if the database
- * were simply unreachable - and it was: pointing the suite at a closed port
- * made a cross-tenant foreign-key test PASS, because `ECONNREFUSED` is a
- * throw too.
- *
- * A constraint test that passes when there is no database is not a constraint
- * test. It is also satisfied by a typo in the INSERT, a renamed column, or a
- * NOT NULL violation on an unrelated field - so it could report "the composite
- * foreign key protects us" while the foreign key had been dropped.
- *
- * Asserting the SQLSTATE fixes all of that at once: 23503 means the FK refused
- * the row, and nothing else does.
- */
-const PG = {
-  uniqueViolation: '23505',
-  foreignKeyViolation: '23503',
-  checkViolation: '23514',
-} as const;
-
-/** Digs the SQLSTATE out of an error, following `cause` if a driver wrapped it. */
-function sqlState(error: unknown): string | undefined {
-  let current: unknown = error;
-  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
-    const code = (current as { code?: unknown }).code;
-    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) {
-      return code;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return undefined;
-}
-
-/**
- * Asserts that `work` is refused by PostgreSQL with a specific SQLSTATE.
- *
- * @param expected - one of `PG`, so the test names the constraint class it
- *   relies on rather than accepting any failure.
- */
-async function expectRefused(work: () => Promise<unknown>, expected: string): Promise<void> {
-  let caught: unknown;
-  try {
-    await work();
-  } catch (error) {
-    caught = error;
-  }
-
-  expect(caught, 'expected PostgreSQL to refuse this statement').toBeDefined();
-  expect(
-    sqlState(caught),
-    `expected SQLSTATE ${expected}, got: ${
-      caught instanceof Error ? caught.message : String(caught)
-    }`,
-  ).toBe(expected);
-}
 
 let pool: ReturnType<typeof createDatabasePool> | undefined;
 
@@ -357,7 +297,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           appliedMode: 'budgeted',
         });
         }),
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'precheck_receipts_workspace_action_id_key' },
     );
   });
 
@@ -374,7 +314,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           payload: {},
         });
         }),
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'events_workspace_event_id_key' },
     );
   });
 
@@ -393,7 +333,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           reason: 'again',
         });
         }),
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'blocks_workspace_external_block_id_key' },
     );
   });
 
@@ -406,7 +346,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           .insert(agents)
           .values({ workspaceId: WS_A, externalId: SHARED_AGENT_EXTERNAL_ID });
         }),
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'agents_workspace_external_id_key' },
     );
   });
 
@@ -478,10 +418,13 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
 
   const CROSS_TENANT_INSERTS: {
     name: string;
+    /** The exact composite FK that must refuse the row. */
+    constraint: string;
     insert: (tx: Tx) => Promise<unknown>;
   }[] = [
     {
       name: 'an event in A referencing B agent',
+      constraint: 'events_workspace_agent_fkey',
       insert: (tx) =>
         tx.insert(events).values({
           workspaceId: WS_A,
@@ -493,11 +436,13 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     },
     {
       name: 'a ledger row in A for B agent',
+      constraint: 'ledger_daily_workspace_agent_fkey',
       insert: (tx) =>
         tx.insert(ledgerDaily).values({ workspaceId: WS_A, agentId: AGENT_B, day: DAY }),
     },
     {
       name: 'a receipt in A for B agent',
+      constraint: 'precheck_receipts_workspace_agent_fkey',
       insert: (tx) =>
         tx.insert(precheckReceipts).values({
           workspaceId: WS_A,
@@ -511,6 +456,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     },
     {
       name: 'a block in A for B agent',
+      constraint: 'blocks_workspace_agent_fkey',
       insert: (tx) =>
         tx.insert(blocks).values({
           workspaceId: WS_A,
@@ -523,6 +469,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     },
     {
       name: "a block in A linked to B's receipt",
+      constraint: 'blocks_workspace_precheck_receipt_fkey',
       insert: (tx) =>
         tx.insert(blocks).values({
           workspaceId: WS_A,
@@ -536,6 +483,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     },
     {
       name: 'an agent policy in A for B agent',
+      constraint: 'agent_policies_workspace_agent_fkey',
       insert: (tx) =>
         tx.insert(agentPolicies).values({
           workspaceId: WS_A,
@@ -545,7 +493,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     },
   ];
 
-  it.each(CROSS_TENANT_INSERTS)('PostgreSQL refuses $name', async ({ insert }) => {
+  it.each(CROSS_TENANT_INSERTS)('PostgreSQL refuses $name', async ({ insert, constraint }) => {
     // The last line of defence. Even with every WHERE clause removed, these
     // rows cannot exist, because the composite key names the workspace.
     await expectRefused(
@@ -554,8 +502,9 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
         await seedBothTenants(tx);
         await insert(tx);
         }),
-      // A composite FK refusing the row - not a unique clash, not any other error.
-      PG.foreignKeyViolation,
+      // A composite FK refusing the row - not a unique clash, not any other
+      // error, and specifically the FK named by this case.
+      { code: PG.foreignKeyViolation, constraint },
     );
   });
 
@@ -619,7 +568,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
         await tx.insert(ledgerDaily).values({ workspaceId: WS_A, agentId: AGENT_A, day: DAY });
         }),
       // The composite PRIMARY KEY (workspace_id, agent_id, day).
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'ledger_daily_pkey' },
     );
   });
 
@@ -631,13 +580,21 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
     await inRolledBackTransaction(async (tx) => {
       await seedBothTenants(tx);
 
-      expect((await policyQueries.findVersion(tx, scopeA))[0]?.version).toBe(1);
-      expect((await policyQueries.findVersion(tx, scopeB))[0]?.version).toBe(7);
+      // STRINGS, not numbers. `version` is a bigint, and `findVersion`
+      // deliberately selects it as `::text` with `sql<string>`: a version can
+      // exceed Number.MAX_SAFE_INTEGER, and the contract
+      // (`policyVersionSchema`) is a decimal string for exactly that reason.
+      // It is only ever compared for equality and ordering, never arithmetic.
+      //
+      // This assertion said `1` until the first real PostgreSQL run corrected
+      // it. The production representation was right; the test was wrong.
+      expect((await policyQueries.findVersion(tx, scopeA))[0]?.version).toBe('1');
+      expect((await policyQueries.findVersion(tx, scopeB))[0]?.version).toBe('7');
 
       // A locking read in A must not block or alter B's row.
       await policyQueries.lockVersionForShare(tx, scopeA);
 
-      expect((await policyQueries.findVersion(tx, scopeB))[0]?.version).toBe(7);
+      expect((await policyQueries.findVersion(tx, scopeB))[0]?.version).toBe('7');
     });
   });
 
@@ -681,8 +638,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           .set({ demoEnabled: false, demoSlug: 'orphaned-abcd1234' })
           .where(inArray(workspaces.id, [WS_A]));
         }),
-      // workspaces_demo_slug_requires_demo_check, specifically.
-      PG.checkViolation,
+      { code: PG.checkViolation, constraint: 'workspaces_demo_slug_requires_demo_check' },
     );
   });
 
@@ -700,7 +656,7 @@ describe.skipIf(!hasTestDatabase)('AC-20 live cross-tenant acceptance', () => {
           .set({ demoEnabled: true, demoSlug: 'contested-abcd1234' })
           .where(inArray(workspaces.id, [WS_B]));
         }),
-      PG.uniqueViolation,
+      { code: PG.uniqueViolation, constraint: 'workspaces_demo_slug_key' },
     );
   });
 

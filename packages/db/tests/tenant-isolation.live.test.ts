@@ -1,6 +1,8 @@
 import { inArray } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { PG, expectRefused } from './helpers/pg-errors';
+
 import { closeDatabasePool, createDatabaseClient, createDatabasePool } from '../src/client';
 import { createAgentRepository } from '../src/repositories/agents';
 import { createEventRepository } from '../src/repositories/events';
@@ -164,27 +166,40 @@ describe.skipIf(!hasTestDatabase)('live cross-tenant isolation', () => {
     // on an unrelated column - while the foreign key was gone.
     //
     // 23503 is `foreign_key_violation` and nothing else produces it.
+    //
+    // ─── AND WHY THE ERROR MUST BE UNWRAPPED ──────────────────────────────
+    //
+    // The first CI run against real PostgreSQL failed HERE, and the database
+    // was not at fault: it refused the insert correctly, with 23503 and
+    // `events_workspace_agent_fkey`. Drizzle wraps driver errors, so the pg
+    // error is on `.cause` and a direct `toMatchObject({ code })` on the
+    // wrapper never sees it. An assertion-layer defect, not an isolation one.
+    //
+    // The constraint NAME is now asserted too, so this cannot start passing
+    // because some other foreign key happened to fire.
     const db = getDb();
 
-    await expect(
-      db.transaction(async (tx) => {
-        await tx.insert(workspaces).values([
-          { id: WORKSPACE_A, name: 'Tenant A' },
-          { id: WORKSPACE_B, name: 'Tenant B' },
-        ]);
-        await tx
-          .insert(agents)
-          .values([{ id: AGENT_B, workspaceId: WORKSPACE_B, externalId: SHARED_EXTERNAL_ID }]);
+    await expectRefused(
+      () =>
+        db.transaction(async (tx) => {
+          await tx.insert(workspaces).values([
+            { id: WORKSPACE_A, name: 'Tenant A' },
+            { id: WORKSPACE_B, name: 'Tenant B' },
+          ]);
+          await tx
+            .insert(agents)
+            .values([{ id: AGENT_B, workspaceId: WORKSPACE_B, externalId: SHARED_EXTERNAL_ID }]);
 
-        // Workspace A event pointing at workspace B's agent - must fail.
-        await tx.insert(events).values({
-          workspaceId: WORKSPACE_A,
-          eventId: 'evt-cross-tenant',
-          agentId: AGENT_B,
-          type: 'heartbeat',
-          payload: {},
-        });
-      }),
-    ).rejects.toMatchObject({ code: '23503' });
+          // Workspace A event pointing at workspace B's agent - must fail.
+          await tx.insert(events).values({
+            workspaceId: WORKSPACE_A,
+            eventId: 'evt-cross-tenant',
+            agentId: AGENT_B,
+            type: 'heartbeat',
+            payload: {},
+          });
+        }),
+      { code: PG.foreignKeyViolation, constraint: 'events_workspace_agent_fkey' },
+    );
   });
 });

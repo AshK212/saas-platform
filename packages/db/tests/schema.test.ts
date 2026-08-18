@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
@@ -404,5 +407,49 @@ describe('revocation is non-destructive', () => {
     ['share_tokens', shareTokens],
   ] as const)('%s revokes via timestamp rather than deletion', (_name, table) => {
     expect(columnNames(table)).toContain('revoked_at');
+  });
+});
+
+describe('live fixtures cannot violate the constraints they depend on', () => {
+  // ─── WHY A SOURCE GUARD ───────────────────────────────────────────────
+  //
+  // The expired-magic-link live test builds a row that must be LEGAL at insert
+  // and EXPIRED at redemption. It originally set `expires_at` in the past and
+  // let `created_at` default to now(), then tried to backdate `created_at`
+  // with a follow-up UPDATE — which never ran, because
+  // `auth_magic_links_expiry_after_creation_check` is evaluated at INSERT.
+  // PostgreSQL rejected the row with 23514 and the test failed for a reason
+  // that had nothing to do with expiry semantics.
+  //
+  // That defect is invisible to `pnpm test`: the live suite skips without a
+  // database, so only a CI round-trip would catch a regression. This guard
+  // makes the mistake fail locally instead — a mutation probe re-introducing
+  // it goes red here rather than on the next push.
+
+  const AUTH_LIVE = path.join(import.meta.dirname, 'auth-isolation.live.test.ts');
+
+  it('the expired-link fixture sets created_at as well as expires_at', () => {
+    const source = readFileSync(AUTH_LIVE, 'utf8');
+
+    // Isolate the direct insert into auth_magic_links.
+    const start = source.indexOf('tx.insert(authMagicLinks).values({');
+    expect(start, 'the expired-link fixture no longer inserts directly').toBeGreaterThan(-1);
+    const values = source.slice(start, source.indexOf('});', start));
+
+    // A backdated expiry REQUIRES a backdated creation, or the CHECK fires.
+    expect(values).toContain('expiresAt:');
+    expect(values, 'a backdated expiry needs a backdated created_at').toContain('createdAt:');
+  });
+
+  it('the constraint it relies on is still declared', () => {
+    const authSchema = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'schema', 'auth.ts'),
+      'utf8',
+    );
+
+    // The invariant itself: a link may never be born already expired. The test
+    // above adapts to this constraint; it must never be relaxed to suit a test.
+    expect(authSchema).toContain('auth_magic_links_expiry_after_creation_check');
+    expect(authSchema).toMatch(/expiresAt\}\s*>\s*\$\{table\.createdAt\}/);
   });
 });

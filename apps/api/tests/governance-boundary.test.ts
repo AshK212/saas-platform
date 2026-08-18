@@ -361,3 +361,46 @@ describe('NO HISTORICAL RECOMPUTATION', () => {
     expect(new Set(assignments)).toEqual(new Set(['row.precheckReceiptId']));
   });
 });
+
+describe('THE EFFECTIVE WATCH DEFAULT IS MATERIALISED BY EVERY CONSUMER', () => {
+  // ─── WHY THIS GUARD EXISTS ────────────────────────────────────────────
+  //
+  // `listEffectivePolicies` LEFT JOINs `agent_policies`, so `mode` is NULL for
+  // an agent with no explicit row. That is the repository's declared contract
+  // ("Null when no explicit agent_policies row exists"), paired with
+  // `hasExplicitPolicy` — it reports absence faithfully and invents nothing.
+  //
+  // Materialising Step 12's WATCH default is therefore the COMPOSITION layer's
+  // job, and it is a job that can be dropped silently: an agent would simply
+  // start reporting `null` mode on the roster, the poll and the editor, and no
+  // type would complain because the source type is nullable.
+  //
+  // A live test asserted 'watch' against the repository and failed with `null`
+  // against real PostgreSQL. The right conclusion was not to change the
+  // expectation — production genuinely must expose 'watch' — but to assert each
+  // layer where it belongs. This pins the composition half.
+
+  const CONSUMERS = [
+    { name: 'the operator fleet roster', segments: ['governance', 'read-store.ts'] },
+    { name: 'machine policy polling', segments: ['policy', 'store.ts'] },
+    { name: 'the operator policy editor', segments: ['policy', 'mutation-store.ts'] },
+  ];
+
+  it.each(CONSUMERS)('$name defaults a missing mode to watch', ({ segments }) => {
+    const source = read(...segments);
+
+    // Either the literal or the shared constant, but never nothing.
+    expect(source).toMatch(/mode:\s*[^\n]*\?\?\s*('watch'|DEFAULT_AGENT_MODE)/);
+  });
+
+  it('and none of them invents a cap alongside it', () => {
+    // Step 12: watch OBSERVES. A default cap would be enforcement nobody asked
+    // for, and a zero would read as "spend nothing" rather than "no cap".
+    for (const { segments } of CONSUMERS) {
+      const source = read(...segments);
+
+      expect(source).not.toMatch(/dailySpendCapUsd:\s*[^\n]*\?\?\s*'[0-9]/);
+      expect(source).not.toMatch(/dailyPublishCap:\s*[^\n]*\?\?\s*[0-9]/);
+    }
+  });
+});

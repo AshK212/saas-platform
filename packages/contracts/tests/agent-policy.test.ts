@@ -7,6 +7,7 @@ import {
   normalizePublishCapInput,
   normalizeSpendCapInput,
 } from '../src/agent-policy';
+import { policyVersionSchema } from '../src/policy';
 
 /**
  * Operator policy mutation contract.
@@ -212,5 +213,44 @@ describe('publish cap normalisation', () => {
     // 0 = nothing permitted. null = no limit.
     expect(normalizePublishCapInput('0')).toBe(0);
     expect(normalizePublishCapInput('')).toBeNull();
+  });
+});
+
+describe('the policy version is a STRING, deliberately', () => {
+  // The representation is consistent across three layers:
+  //
+  //   schema      bigint
+  //   repository  selected as `::text`, typed `sql<string>` (pinned in
+  //               packages/db/tests/policy.test.ts)
+  //   contract    this schema, a decimal-string regex
+  //
+  // A version is compared for equality and ordering, never arithmetic, so a
+  // string costs nothing and a number would silently lose precision past 2^53.
+  // `since_version` uses the same domain, so a polling client and the server
+  // can never be comparing two representations of one value.
+  //
+  // Pinned because a live test once asserted the repository returned the
+  // NUMBER 1, and failed against real PostgreSQL. The production
+  // representation was right; the assertion was not.
+
+  it('accepts a decimal string', () => {
+    expect(policyVersionSchema.safeParse('1').success).toBe(true);
+    expect(policyVersionSchema.safeParse('7').success).toBe(true);
+  });
+
+  it('accepts a value beyond Number.MAX_SAFE_INTEGER', () => {
+    // 2^53 + 1. The whole reason this is not a number.
+    expect(policyVersionSchema.safeParse('9007199254740993').success).toBe(true);
+  });
+
+  it('REJECTS a JavaScript number', () => {
+    expect(policyVersionSchema.safeParse(1).success).toBe(false);
+    expect(policyVersionSchema.safeParse(7).success).toBe(false);
+  });
+
+  it('rejects anything that is not a non-negative decimal integer', () => {
+    for (const invalid of ['', '-1', '1.0', '01', 'one', ' 1', '1 ']) {
+      expect(policyVersionSchema.safeParse(invalid).success, invalid).toBe(false);
+    }
   });
 });

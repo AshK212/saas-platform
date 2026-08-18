@@ -98,30 +98,44 @@ async function readFleet(
 
   const ledgerRepository = createLedgerRepository(executor, scope);
 
-  const [roster, policies] = await Promise.all([
-    createAgentRepository(executor, scope).listAll(),
-    createPolicyReadRepository(executor, scope).listEffectivePolicies(),
-  ]);
+  // ─── SEQUENTIAL HERE, CONCURRENT IN PRODUCTION - ON PURPOSE ─────────────
+  //
+  // `apps/api/src/governance/read-store.ts` runs these same reads under
+  // `Promise.all` over the POOL, where each query takes its own client. That
+  // is correct and is not changed.
+  //
+  // This helper receives a TRANSACTION, which is a single pg Client. Issuing
+  // concurrent queries on one client produced the deprecation warning seen in
+  // CI - `Calling client.query() when the client is already executing a query`
+  // - which pg 8 tolerates by queueing them and pg 9 will remove. The queueing
+  // means these were never actually concurrent, so awaiting in order costs
+  // nothing and removes a scheduled breakage.
+  //
+  // What must stay identical to production is the MAPPING below, not the
+  // scheduling.
+  const roster = await createAgentRepository(executor, scope).listAll();
+  const policies = await createPolicyReadRepository(executor, scope).listEffectivePolicies();
 
   const policyByAgent = new Map(policies.map((row) => [row.id, row]));
 
-  return Promise.all(
-    roster.map(async (agent) => {
-      const policy = policyByAgent.get(agent.id);
-      // READ, never lock, never create.
-      const usage = (await ledgerRepository.findDailyLedger(agent.id, day)) ?? NO_USAGE;
+  const fleet: FleetGovernance[] = [];
+  for (const agent of roster) {
+    const policy = policyByAgent.get(agent.id);
+    // READ, never lock, never create.
+    const usage = (await ledgerRepository.findDailyLedger(agent.id, day)) ?? NO_USAGE;
 
-      return {
-        agentId: agent.id,
-        mode: policy?.mode ?? 'watch',
-        dailySpendCapUsd: policy?.dailySpendCapUsd ?? null,
-        dailyPublishCap: policy?.dailyPublishCap ?? null,
-        spendCommittedUsd: usage.spendCommittedUsd,
-        publishCountCommitted: usage.publishCountCommitted,
-        accountingDay: day,
-      };
-    }),
-  );
+    fleet.push({
+      agentId: agent.id,
+      // The WATCH default, materialised exactly as production does it.
+      mode: policy?.mode ?? 'watch',
+      dailySpendCapUsd: policy?.dailySpendCapUsd ?? null,
+      dailyPublishCap: policy?.dailyPublishCap ?? null,
+      spendCommittedUsd: usage.spendCommittedUsd,
+      publishCountCommitted: usage.publishCountCommitted,
+      accountingDay: day,
+    });
+  }
+  return fleet;
 }
 
 let pool: ReturnType<typeof createDatabasePool> | undefined;
@@ -547,19 +561,47 @@ describe.skipIf(!hasTestDatabase)('live governance reads', () => {
       await db.transaction(async (tx) => {
         const { workspaceId } = await seedWorkspace(tx, WORKSPACE_A_NAME, null);
 
+        // ─── TWO LAYERS, TWO DIFFERENT CONTRACTS ─────────────────────────
+        //
+        // This test asserted `mode === 'watch'` on the REPOSITORY and failed
+        // against real PostgreSQL with `null`. Production was not at fault.
+        //
+        // `listEffectivePolicies` LEFT JOINs `agent_policies` and its declared
+        // type is `mode: 'watch' | 'budgeted' | 'paused' | null`, documented as
+        // "Null when no explicit agent_policies row exists", with
+        // `hasExplicitPolicy` as the companion flag. Reporting the absence
+        // faithfully is the repository's job.
+        //
+        // Materialising the WATCH default is the COMPOSITION layer's job, and
+        // every consumer does it: `lockPolicyForDecision` (enforcement),
+        // `governance/read-store.ts` (the roster), `policy/store.ts` (machine
+        // polling) and `policy/mutation-store.ts` (the operator editor).
+        //
+        // So both halves are asserted, at the layer that owns each. Asserting
+        // only the repository would have let the default silently vanish from
+        // the surfaces that must show it.
         const effective = await createPolicyReadRepository(
           tx,
           createWorkspaceScope(workspaceId),
         ).listEffectivePolicies();
 
-        // Watch with NULL caps - never a persisted zero, which would read as
-        // "spend nothing" rather than "no cap".
+        // 1. The repository reports ABSENCE, with no invented values.
         expect(effective).toHaveLength(1);
-        expect(effective[0]?.mode).toBe('watch');
+        expect(effective[0]?.mode).toBeNull();
+        expect(effective[0]?.hasExplicitPolicy).toBe(false);
         expect(effective[0]?.dailySpendCapUsd).toBeNull();
         expect(effective[0]?.dailyPublishCap).toBeNull();
 
-        // And no row was created by reading.
+        // 2. The composition materialises WATCH with NULL caps - never a
+        //    persisted zero, which would read as "spend nothing" rather than
+        //    "no cap". `readFleet` mirrors apps/api/src/governance/read-store.
+        const fleet = await readFleet(tx, workspaceId, NOW);
+        expect(fleet).toHaveLength(1);
+        expect(fleet[0]?.mode).toBe('watch');
+        expect(fleet[0]?.dailySpendCapUsd).toBeNull();
+        expect(fleet[0]?.dailyPublishCap).toBeNull();
+
+        // And no row was created by reading, at either layer.
         const stored = await tx
           .select()
           .from(agentPolicies)

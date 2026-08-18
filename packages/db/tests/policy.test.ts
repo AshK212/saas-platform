@@ -46,6 +46,32 @@ describe('the version query is workspace-scoped', () => {
     expect(sql).toContain('"version"');
   });
 
+  it('THE VERSION IS SELECTED AS TEXT, NEVER AS A NUMBER', () => {
+    // The representation is deliberate and consistent across three layers:
+    //
+    //   schema      bigint
+    //   repository  selected as `::text`, typed `sql<string>`
+    //   contract    `policyVersionSchema`, a decimal-string regex
+    //
+    // A version is compared for equality and ordering, never arithmetic, so a
+    // string costs nothing and a number would silently lose precision past
+    // 2^53. `since_version` uses the same domain, so a polling client and the
+    // server can never compare two representations of one value.
+    //
+    // This is pinned because a live test once asserted the repository returned
+    // the NUMBER 1 and failed against real PostgreSQL. The production
+    // representation was right; the assertion was not.
+    //
+    // The contract half lives in packages/contracts, because @hybrid/db does
+    // not depend on @hybrid/contracts and must not start doing so for a test.
+    const { sql } = policyQueries.findVersion(db, scopeA).toSQL();
+
+    expect(sql).toContain('::text');
+    // Never mapped back to a number anywhere in this query.
+    expect(sql).not.toContain('::int');
+    expect(sql).not.toContain('::bigint');
+  });
+
   it('reads one row and nothing else', () => {
     const { sql } = policyQueries.findVersion(db, scopeA).toSQL();
 

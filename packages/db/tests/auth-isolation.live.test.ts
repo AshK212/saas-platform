@@ -115,20 +115,39 @@ describe.skipIf(!hasTestDatabase)('live authentication', () => {
       await db.transaction(async (tx) => {
         const [user] = await tx.insert(users).values({ email: EMAIL_A }).returning();
         const plaintext = token();
-        const past = new Date(Date.now() - 60 * 60 * 1_000);
 
-        await insertMagicLink(tx, {
+        // ─── A LINK THAT WAS VALID WHEN ISSUED, AND IS EXPIRED NOW ────────
+        //
+        // The point of this test is redemption-time expiry, so the fixture has
+        // to be a link that was legitimate at T0 and has since lapsed:
+        //
+        //   T0  issued two hours ago
+        //   T1  expired one hour ago      (T1 > T0, so the row is legal)
+        //   T2  redeemed now              (T2 > T1, so redemption must refuse)
+        //
+        // The previous version wrote `expires_at` in the past while letting
+        // `created_at` default to now(), then tried to push `created_at` back
+        // with a follow-up UPDATE. That UPDATE never ran: the CHECK
+        // `auth_magic_links_expiry_after_creation_check` is evaluated at INSERT,
+        // so the row was rejected with 23514 before it existed. The first real
+        // PostgreSQL run caught it.
+        //
+        // The constraint is correct and is left alone - a link must never be
+        // born already expired. Only the fixture was wrong.
+        const issuedAt = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+        const expiredAt = new Date(Date.now() - 60 * 60 * 1_000);
+
+        // Inserted directly rather than through `insertMagicLink`, which takes
+        // no `createdAt` by design: production always issues links now, and
+        // widening that signature to backdate one would be a test convenience
+        // leaking into the authentication surface.
+        await tx.insert(authMagicLinks).values({
           userId: user?.id ?? '',
           email: EMAIL_A,
           tokenHash: hash(plaintext),
-          // Expired an hour ago. The CHECK requires expires_at > created_at,
-          // so created_at is pushed further back via a direct update.
-          expiresAt: new Date(past.getTime() + 1_000),
+          createdAt: issuedAt,
+          expiresAt: expiredAt,
         });
-        await tx
-          .update(authMagicLinks)
-          .set({ createdAt: past })
-          .where(eq(authMagicLinks.tokenHash, hash(plaintext)));
 
         expect(await consumeMagicLink(tx, hash(plaintext), new Date())).toBeNull();
 
