@@ -6,8 +6,8 @@
   "description": "Control-plane API (Hono). Step 1: liveness endpoint and composition skeleton only.",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js"
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "start": "node --env-file-if-exists=../../.env dist/index.js"
   },
   "dependencies": {
     "@hono/node-server": "2.1.0",

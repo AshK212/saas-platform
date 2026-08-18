@@ -6,8 +6,8 @@
   "description": "Reference client for the control-plane public API. Drives the Credit acceptance flows over HTTP with a workspace API key; holds no database access and no operator authority.",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "dev": "tsx --env-file-if-exists=../../.env src/index.ts",
+    "start": "node --env-file-if-exists=../../.env dist/index.js"
   },
   "dependencies": {
     "@hybrid/contracts": "workspace:*"

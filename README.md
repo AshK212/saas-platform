@@ -107,13 +107,59 @@ pnpm install
 
 ## Development
 
+From a fresh clone:
+
+```bash
+pnpm install
+cp .env.example .env     # then fill in DATABASE_URL — see Environment setup
+pnpm build               # required once: both apps consume @hybrid/contracts
+pnpm db:migrate          # creates the schema in the database .env points at
+```
+
+Then, in two terminals:
+
 ```bash
 pnpm dev:api     # API with watch reload (http://127.0.0.1:3000)
 pnpm dev:web     # Web app (http://localhost:5173)
 ```
 
-The web app and the API both consume `@hybrid/contracts`, so run `pnpm build`
-once after a fresh clone to produce the workspace packages' `dist/` output.
+Open **http://localhost:5173**. The Vite dev server proxies `/v1/*` to the API,
+so the browser sees a single origin and the session cookie works — the same
+shape as the deployed one.
+
+### The API reads `.env` automatically
+
+`dev:api` and `start:api` pass `--env-file-if-exists=.env` to Node, so a root
+`.env` is loaded without any extra flag.
+
+Two properties worth knowing:
+
+- **A real environment variable always wins.** `--env-file` never overrides a
+  value already in the process environment, so a stray `.env` cannot shadow
+  what Render supplies in production.
+- **A missing `.env` is not an error.** The `-if-exists` form is deliberate: a
+  fresh clone with no `.env` still starts, which is what CI does.
+
+Any other entry point — `pnpm db:migrate`, the simulator — does **not** load
+`.env` on its own. Pass the flag yourself, or export the variable:
+
+```bash
+node --env-file=.env node_modules/.bin/tsx packages/db/src/migrate.ts
+```
+
+### Running without a database
+
+The API starts anyway and says so:
+
+```text
+[api] DATABASE_URL is not configured; /readyz will report "unconfigured".
+[api] authentication disabled; missing: DATABASE_URL, APP_URL, RESEND_API_KEY, AUTH_FROM_EMAIL
+```
+
+`GET /healthz` still returns 200 — liveness never touches the database — while
+`GET /readyz` returns 503. That is deliberate: a database incident must not make
+a healthy process look dead. Sign-in needs `APP_URL`, `RESEND_API_KEY` and
+`AUTH_FROM_EMAIL` in addition to `DATABASE_URL`.
 
 ## Validation
 
@@ -290,6 +336,11 @@ cp .env.example .env
 `.env.example` contains placeholders only — never real secrets. `.env` and
 `.env.*` are gitignored. Secrets are supplied at runtime through environment
 variables, never through Git.
+
+The API loads a root `.env` automatically (see
+[Development](#the-api-reads-env-automatically)). `DATABASE_URL` is the only one
+needed to start and reach a database; the placeholder in `.env.example` is not a
+working value and must be replaced with a real connection string.
 
 Only `VITE_`-prefixed variables reach the browser bundle; never place a secret
 behind that prefix.
