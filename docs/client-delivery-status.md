@@ -1,6 +1,6 @@
 # Client Delivery Status
 
-Last updated: **2026-08-17** (Step 24 — AC-21 CI verification gate; first real GitHub run).
+Last updated: **2026-08-17** (pre-deployment staging audit).
 
 This document tracks **contractual and operational** obligations, separately
 from code completion. An item is not satisfied merely because it is documented,
@@ -26,6 +26,29 @@ Code status is tracked in
 | 9 | 30-day warranty after accepted Credit completion | `NOT STARTED` |
 
 ---
+
+## Staging deployment: audited, not performed
+
+A pre-deployment audit was run against the repository. **No deployment has
+occurred.** No Render service, Neon project or Resend domain exists for this
+project, and none has been created under a developer identity — that boundary
+has been held since Step 1 and is held here.
+
+What the audit produced:
+
+- **A blocking defect in the Render blueprint, found and fixed.** It deployed
+  the web app and the API as two services with no route between them. The
+  frontend calls the API with *relative* paths and reads no API base URL, so the
+  static site would have resolved `/v1/auth/me` against itself and returned
+  `index.html` where the app expected JSON — every API call broken. The
+  blueprint now carries a `/v1/*` rewrite that preserves a single origin, and
+  the phantom `VITE_API_URL` (declared but read by nothing) is gone.
+- **A step-ordered runbook**, in [deployment.md](deployment.md#staging-deployment-runbook).
+  The ordering is not cosmetic: an API key cannot be issued until an operator
+  signs in, which cannot happen until Resend delivers a magic link.
+- **Security pre-checks that do not need a deployment**, all passing: no secret
+  is tracked in Git, the production frontend bundle contains no credential and
+  no absolute API origin, and CORS stays off unless `WEB_ORIGIN` is set.
 
 ## Detail
 

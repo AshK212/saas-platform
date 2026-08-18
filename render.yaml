@@ -1,12 +1,36 @@
 # Render blueprint for the AI Hybrid Multi-Agent Platform.
 #
 # STATUS: NOT DEPLOYED, NOT VALIDATED AGAINST RENDER.
-# This file records the intended deployment shape. The build and start commands
-# mirror the scripts that ARE validated locally (`pnpm build:api`, `pnpm build:web`,
-# `pnpm start:api`). No Render service has been created and no deploy has run.
+# No Render service has been created, no deploy has run, and no value below has
+# been exercised by Render. The build and start commands mirror the scripts that
+# ARE validated locally (`pnpm build:api`, `pnpm build:web`, `pnpm start:api`).
 #
-# OWNERSHIP: staging and production services must ultimately live under Ashir's
-# Render account, not a developer account.
+# OWNERSHIP: staging and production services must live under Ashir's Render
+# account, not a developer account.
+#
+# ─── THE ONE THING TO GET RIGHT: A SINGLE ORIGIN ────────────────────────────
+#
+# The browser app calls the API with RELATIVE paths (`fetch('/v1/...')`). There
+# is no configurable API base URL in the frontend, and that is deliberate:
+#
+#   - the session cookie is HttpOnly and `SameSite=Lax`;
+#   - `SameSite=Lax` is only sent on same-site requests;
+#   - so one origin means no CORS, and the cookie simply works.
+#
+# A previous version of this file deployed the two services and stopped there.
+# That could not have worked: the static site would have resolved `/v1/auth/me`
+# against ITSELF, matched the SPA catch-all, and returned `index.html` where the
+# app expected JSON - every API call broken, with a confusing symptom.
+#
+# The `/v1/*` rewrite below is what makes the two services look like one origin
+# to the browser. It MUST stay ahead of the SPA catch-all: Render evaluates
+# routes in order, and `/*` would otherwise swallow the API path.
+#
+# THE ALTERNATIVE, AND WHY IT IS NOT USED: serving the two on separate origins
+# would require `WEB_ORIGIN` on the API, `SameSite=None; Secure` cookies (a
+# weaker CSRF posture, documented in docs/authentication.md), AND a frontend
+# change to introduce an absolute API base that does not exist today. The
+# rewrite keeps the deployed shape identical to the one every test exercises.
 
 services:
   # ---------------------------------------------------------------------------
@@ -18,27 +42,34 @@ services:
     plan: starter
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build:api
     startCommand: pnpm run start:api
+    # Liveness only - it never touches the database, so a database incident
+    # cannot make Render cycle a healthy instance. Switch to /readyz only if
+    # withholding traffic from a database-less instance becomes the goal.
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
         value: 20.20.2
       - key: NODE_ENV
         value: production
-      # Render routes external traffic to the port in $PORT; bind all interfaces.
+      # Render routes external traffic to $PORT; bind all interfaces.
       - key: HOST
         value: 0.0.0.0
       # Secrets are set in the Render dashboard and never committed.
       # sync: false keeps the value out of this file and out of Git.
       - key: DATABASE_URL
         sync: false
-      # Authentication. Absolute https origin of the browser app; also the only
-      # post-callback redirect destination.
+      # Authentication. The absolute https origin of the BROWSER APP, and the
+      # only post-callback redirect destination. With the rewrite below, that
+      # is the WEB service's URL - not the API's.
       - key: APP_URL
         sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: AUTH_FROM_EMAIL
         sync: false
+      # WEB_ORIGIN is deliberately NOT set. It exists only for a split-origin
+      # deployment, which this blueprint avoids. Setting it here would enable
+      # CORS for a cross-origin app that does not exist.
 
   # ---------------------------------------------------------------------------
   # Operator web shell (static)
@@ -51,10 +82,36 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.20.2
-      # Browser-visible only. Never place a secret behind a VITE_ prefix.
-      - key: VITE_API_URL
-        sync: false
+      # NOTE: there is deliberately no VITE_API_URL. The frontend reads no such
+      # variable - it calls relative paths. An earlier version of this file
+      # declared one, which was a phantom: it configured nothing, and invited a
+      # future maintainer to "wire it up" and break the cookie model.
     routes:
+      # ORDER MATTERS. The API rewrite must precede the SPA catch-all.
+      #
+      # Replace the destination host with the deployed API service's URL once
+      # Render assigns it. Documented in docs/deployment.md.
+      - type: rewrite
+        source: /v1/*
+        destination: https://hybrid-api.onrender.com/v1/*
+      # Single-page app: every other path serves the shell, which then routes
+      # client-side (including /share/:token and /demo/:slug).
       - type: rewrite
         source: /*
         destination: /index.html
+
+# ---------------------------------------------------------------------------
+# NOT INCLUDED, AND WHY
+# ---------------------------------------------------------------------------
+#
+# The AC-19 demo generator is a background worker (`pnpm --filter
+# @hybrid/simulator start demo`). It is omitted from this blueprint on purpose:
+# it needs a workspace API key, and a key cannot exist until the API is
+# deployed and an operator has signed in and issued one. Adding it here would
+# make the first blueprint apply fail on a missing secret.
+#
+# It is a third service to add AFTER the acceptance walkthrough provisions a
+# key. See docs/deployment.md.
+#
+# No PostgreSQL service is declared: Neon is the locked database, and running a
+# second one on Render would create a divergent environment.

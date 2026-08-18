@@ -54,7 +54,46 @@ Build command:  corepack enable && pnpm install --frozen-lockfile && pnpm run bu
 Publish path:   apps/web/dist
 ```
 
-A rewrite of `/*` to `/index.html` is configured for client-side routing.
+Two rewrites, **in this order**:
+
+```text
+1.  /v1/*   ->  https://<api-service>.onrender.com/v1/*     (proxy to the API)
+2.  /*      ->  /index.html                                 (client-side routing)
+```
+
+#### Why the `/v1/*` rewrite is not optional
+
+The browser app calls the API with **relative paths** (`fetch('/v1/...')`) and
+reads no API base URL from anywhere. That is deliberate:
+
+- the session cookie is HttpOnly and `SameSite=Lax`;
+- `SameSite=Lax` is only sent on same-site requests;
+- one origin therefore means no CORS, and the cookie simply works.
+
+Without the rewrite, the static site resolves `/v1/auth/me` **against itself**,
+falls through to the SPA catch-all, and returns `index.html` where the app
+expects JSON. Every API call breaks, with a symptom that looks nothing like its
+cause.
+
+The blueprint carried exactly that defect until the pre-deployment audit: two
+services, no rewrite, and a `VITE_API_URL` variable that **no source file
+reads**. The phantom variable has been removed — leaving it would invite someone
+to wire it up and silently break the cookie model.
+
+#### The split-origin alternative, and its cost
+
+Serving the app and the API on genuinely different origins is possible but is
+**not** what this deployment does. It would require:
+
+1. `WEB_ORIGIN` set on the API (enables the single-origin CORS allowlist);
+2. `SameSite=None; Secure` cookies — a weaker CSRF posture, see
+   [authentication.md](authentication.md);
+3. **a frontend code change** to introduce an absolute API base that does not
+   exist today.
+
+The rewrite keeps the deployed shape identical to the one every test exercises,
+so it is preferred. If Render's rewrite proxying does not behave as expected,
+that is the fallback — and it is a code change, not a configuration change.
 
 ### Authentication and cookie deployment
 
@@ -137,6 +176,73 @@ account**, not a developer account. See
 **BLOCKED**.
 
 ---
+
+## Staging deployment runbook
+
+**Status: NOT DEPLOYED.** No Render service, Neon project or Resend domain
+exists for this project, and none has been created under a developer identity.
+Everything below is the procedure, not a record of it having been run.
+
+### Order matters
+
+Each step depends on the one before it. In particular an API key cannot exist
+until an operator has signed in, and an operator cannot sign in until Resend
+delivers a magic link.
+
+| # | Step | Owner | Blocked by |
+| --- | --- | --- | --- |
+| 1 | Create the Neon **staging** project; copy the pooled and direct connection strings | Ashir | — |
+| 2 | Apply migrations to staging (below) | Developer | 1 |
+| 3 | Create the Render **API** service from `render.yaml`; set `DATABASE_URL` (pooled), `APP_URL` (the WEB url from step 4), `RESEND_API_KEY`, `AUTH_FROM_EMAIL` | Ashir | 1 |
+| 4 | Create the Render **web** static site; set the `/v1/*` rewrite to the API URL | Ashir | 3 |
+| 5 | Verify `GET /healthz` → 200 and `GET /readyz` → 200 | Developer | 3 |
+| 6 | Verify a magic-link sign-in end to end | Developer | 3, 4, Resend domain |
+| 7 | Issue a workspace API key through the UI | Developer | 6 |
+| 8 | Run the reference client against staging (AC-03 … AC-13) | Developer | 7 |
+| 9 | Add the demo-generator worker with that key (AC-19) | Ashir | 7 |
+
+`APP_URL` and the rewrite destination are mutually dependent: create both
+services first, then set each one's value from the other's assigned URL.
+
+### Applying migrations to staging
+
+Migrations are **checked in** and applied by the runtime migrator — never by
+`drizzle-kit push`, which would diverge the schema from the journal.
+
+```bash
+# Use Neon's DIRECT (unpooled) string for DDL, not the -pooler one.
+DATABASE_URL='<neon-direct-staging-url>' pnpm db:migrate
+```
+
+Before running it, confirm the target is the intended **staging** database:
+
+```bash
+# Prints only the redacted target - host and database, never the password.
+# The migrator logs the same line on every run.
+```
+
+The migrator prints `[migrate] target <redacted>` first. Read it. It is the
+only cheap guard against a mistyped environment.
+
+Afterwards, from the repository:
+
+```bash
+pnpm db:check    # journal integrity
+pnpm db:drift    # schema matches the committed migrations
+```
+
+Neither needs a database, so both stay meaningful regardless of what staging
+holds. Nothing in this procedure drops, truncates or resets data.
+
+### Redeploy and rollback
+
+Render auto-deploys `main`. To roll back, use Render's **Rollback** on the
+previous successful deploy — it redeploys that commit's build.
+
+Rolling back the **application** does not roll back the **database**. Migrations
+are forward-only and there are no down-migrations, so a schema change that must
+be reversed needs a new, reviewed migration. Plan accordingly before applying
+one to staging.
 
 ## Neon
 
