@@ -127,12 +127,12 @@ export function AgentPolicy({
   }
 
   if (state.status === 'loading') {
-    return <p className="text-sm text-slate-400">Loading policy…</p>;
+    return <p className="text-sm text-ink-muted">Loading policy…</p>;
   }
 
   if (state.status === 'error') {
     return (
-      <p role="alert" className="text-sm text-red-400">
+      <p role="alert" className="text-sm text-deny">
         {state.message}
       </p>
     );
@@ -140,21 +140,21 @@ export function AgentPolicy({
 
   return (
     <form
-      className="space-y-4 rounded-md border border-slate-800 bg-slate-900/60 p-4"
+      className="space-y-4 rounded-md border border-line bg-canvas p-4"
       onSubmit={(event) => {
         void onSave(event);
       }}
     >
       <div className="space-y-1">
-        <h4 className="text-sm font-medium text-slate-100">Policy for {agentLabel}</h4>
-        <p className="text-xs text-slate-500">
+        <h4 className="text-sm font-medium text-ink">Policy for {agentLabel}</h4>
+        <p className="text-xs text-ink-faint">
           These values are recorded and published to the agent. Enforcement arrives in a later
           step.
         </p>
       </div>
 
       <div className="space-y-2">
-        <label htmlFor={`mode-${agentId}`} className="block text-xs text-slate-400">
+        <label htmlFor={`mode-${agentId}`} className="block text-xs text-ink-muted">
           Mode
         </label>
         <select
@@ -167,7 +167,7 @@ export function AgentPolicy({
               setMode(parsed.data);
             }
           }}
-          className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-500 disabled:opacity-60"
+          className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent disabled:opacity-60"
         >
           {agentModeSchema.options.map((option) => (
             <option key={option} value={option}>
@@ -179,7 +179,7 @@ export function AgentPolicy({
 
       <div className="flex flex-wrap gap-4">
         <div className="min-w-0 flex-1 space-y-2">
-          <label htmlFor={`spend-${agentId}`} className="block text-xs text-slate-400">
+          <label htmlFor={`spend-${agentId}`} className="block text-xs text-ink-muted">
             Daily spend cap (USD)
           </label>
           <input
@@ -192,12 +192,12 @@ export function AgentPolicy({
             onChange={(event) => {
               setSpendCap(event.target.value);
             }}
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-slate-500 disabled:opacity-60"
+            className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 font-mono text-sm text-ink outline-none focus:border-accent disabled:opacity-60"
           />
         </div>
 
         <div className="min-w-0 flex-1 space-y-2">
-          <label htmlFor={`publish-${agentId}`} className="block text-xs text-slate-400">
+          <label htmlFor={`publish-${agentId}`} className="block text-xs text-ink-muted">
             Daily publish cap
           </label>
           <input
@@ -210,33 +210,33 @@ export function AgentPolicy({
             onChange={(event) => {
               setPublishCap(event.target.value);
             }}
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-slate-500 disabled:opacity-60"
+            className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 font-mono text-sm text-ink outline-none focus:border-accent disabled:opacity-60"
           />
         </div>
       </div>
 
-      <p className="text-xs text-slate-500">Leave a cap blank for no cap. 0 means nothing allowed.</p>
+      <p className="text-xs text-ink-faint">Leave a cap blank for no cap. 0 means nothing allowed.</p>
 
       {canManage ? (
         <button
           type="submit"
           disabled={saving}
-          className="rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 disabled:opacity-60"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
           {saving ? 'Saving…' : 'Save policy'}
         </button>
       ) : (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-faint">
           Only workspace operators can change agent policy.
         </p>
       )}
 
       {savedVersion !== null && formError === '' && (
-        <p className="text-xs text-slate-400">Saved. Policy version {savedVersion}.</p>
+        <p className="text-xs text-ink-muted">Saved. Policy version {savedVersion}.</p>
       )}
 
       {formError !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {formError}
         </p>
       )}

@@ -1,29 +1,31 @@
 import {
   AUTH_CALLBACK_RESULT_PARAM,
   authCallbackResultSchema,
-  CONTRACTS_VERSION,
-  PLATFORM_NAME,
   type CurrentUserResponse,
+  type WorkspaceSummary,
 } from '@hybrid/contracts';
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 
 import { fetchCurrentUser, logout } from './api';
 import { DemoView } from './DemoView';
 import { SharedView } from './SharedView';
 import { SignIn } from './SignIn';
-import { Workspaces } from './Workspaces';
+import { WorkspaceApp } from './WorkspaceApp';
+import { WorkspacePicker } from './WorkspacePicker';
 
 /**
- * Application shell.
+ * Application root.
  *
- * STEP 5 SCOPE
- * ------------
- * Enough UI to prove the authentication flow end to end: request a link, land
- * back from the callback, see the signed-in identity, sign out.
+ * Decides which of four experiences the visitor gets, in strict order:
  *
- * There is deliberately no dashboard, no workspace picker, no fleet data, no
- * policy UI and no charts. Being signed in grants access to no workspace -
- * workspace selection is Step 6.
+ *   1. a public SHARED view      (/share/:token)   - no session consulted
+ *   2. a public DEMO view        (/demo/:slug)     - no session consulted
+ *   3. sign-in                   (no session)
+ *   4. the workspace application (signed in)
+ *
+ * The two public surfaces are matched on pathname BEFORE any authenticated
+ * request is made, because both must render for a visitor who has no session
+ * and must never be redirected to a login screen.
  */
 
 type AuthState =
@@ -103,12 +105,9 @@ export function App(): JSX.Element {
   const [shareToken] = useState(readShareToken);
   const [demoSlug] = useState(readDemoSlug);
   const [auth, setAuth] = useState<AuthState>({ status: 'loading' });
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [openWorkspaceId, setOpenWorkspaceId] = useState<string | null>(null);
   const callbackResult = useCallbackResult();
-
-  const refresh = useCallback(async () => {
-    const user = await fetchCurrentUser();
-    setAuth(user === null ? { status: 'signed-out' } : { status: 'signed-in', user });
-  }, []);
 
   useEffect(() => {
     // State is set only after the await resolves, and only if this component is
@@ -130,7 +129,11 @@ export function App(): JSX.Element {
 
   async function onSignOut(): Promise<void> {
     await logout();
-    await refresh();
+    // Every trace of the previous session's context goes with it.
+    setOpenWorkspaceId(null);
+    setWorkspaces([]);
+    const user = await fetchCurrentUser();
+    setAuth(user === null ? { status: 'signed-out' } : { status: 'signed-in', user });
   }
 
   // THE PUBLIC SHARED VIEW. Returned before any session is consulted, so the
@@ -144,62 +147,50 @@ export function App(): JSX.Element {
     return <DemoView slug={demoSlug} />;
   }
 
+  if (auth.status === 'loading') {
+    return (
+      <main className="grid min-h-screen place-items-center bg-canvas">
+        <p role="status" aria-live="polite" className="text-sm text-ink-muted">
+          Loading…
+        </p>
+      </main>
+    );
+  }
+
+  if (auth.status === 'signed-out') {
+    return <SignIn invalidLink={callbackResult === 'invalid_link'} />;
+  }
+
+  const open = workspaces.find((workspace) => workspace.id === openWorkspaceId) ?? null;
+
+  if (open === null) {
+    return (
+      <WorkspacePicker
+        email={auth.user.email}
+        onOpen={(workspace) => {
+          // The picker already holds the authorized summary; keeping it here
+          // avoids a second round trip just to learn the name and role.
+          setWorkspaces((current) =>
+            current.some((entry) => entry.id === workspace.id) ? current : [...current, workspace],
+          );
+          setOpenWorkspaceId(workspace.id);
+        }}
+        onSignOut={() => {
+          void onSignOut();
+        }}
+      />
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-8 px-6 py-16">
-        <header className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
-            Credit Phase &middot; Step 11 Event Timeline
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight">{PLATFORM_NAME}</h1>
-        </header>
-
-        {callbackResult === 'invalid_link' && (
-          <p role="alert" className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-            That sign-in link is no longer valid. Links can be used once and expire after 15
-            minutes. Request a new one below.
-          </p>
-        )}
-
-        <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-6">
-          {auth.status === 'loading' && <p className="text-sm text-slate-400">Loading…</p>}
-
-          {auth.status === 'signed-out' && <SignIn />}
-
-          {auth.status === 'signed-in' && (
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <h2 className="text-lg font-medium">Signed in</h2>
-                <p className="font-mono text-sm text-slate-300">{auth.user.email}</p>
-              </div>
-              <p className="max-w-prose text-sm text-slate-400">
-                Being signed in authorizes no workspace on its own. Every workspace action below
-                is re-checked against your membership by the server.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  void onSignOut();
-                }}
-                className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800"
-              >
-                Sign out
-              </button>
-            </div>
-          )}
-        </section>
-
-        {auth.status === 'signed-in' && (
-          <section className="rounded-lg border border-slate-800 bg-slate-900/40 p-6">
-            <Workspaces />
-          </section>
-        )}
-
-        <footer className="border-t border-slate-800 pt-6 text-sm text-slate-500">
-          Contracts v{CONTRACTS_VERSION} &middot; business features are intentionally not
-          implemented yet.
-        </footer>
-      </div>
-    </main>
+    <WorkspaceApp
+      workspace={open}
+      workspaces={workspaces}
+      email={auth.user.email}
+      onSwitchWorkspace={setOpenWorkspaceId}
+      onSignOut={() => {
+        void onSignOut();
+      }}
+    />
   );
 }

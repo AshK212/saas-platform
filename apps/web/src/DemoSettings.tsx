@@ -68,8 +68,8 @@ export function DemoSettingsPanel({ workspaceId, canManage }: DemoSettingsProps)
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <h3 className="text-base font-medium">Public demo</h3>
-        <p className="max-w-prose text-sm text-slate-400">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Public demo</h1>
+        <p className="max-w-prose text-sm text-ink-muted">
           Public demo mode makes this workspace readable by <strong>anyone</strong> with the URL,
           with no sign-in. It is read-only &mdash; no policy, credential or workspace changes are
           possible through it &mdash; but the fleet, spend totals, events and blocks are all
@@ -78,18 +78,18 @@ export function DemoSettingsPanel({ workspaceId, canManage }: DemoSettingsProps)
       </div>
 
       {error !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {error}
         </p>
       )}
 
       {demo === null ? (
-        <p className="text-sm text-slate-400">Loading…</p>
+        <p className="text-sm text-ink-muted">Loading…</p>
       ) : (
         <div className="space-y-3">
           <p className="text-sm">
             Status:{' '}
-            <span className={demo.enabled ? 'text-emerald-400' : 'text-slate-400'}>
+            <span className={demo.enabled ? 'text-ok' : 'text-ink-muted'}>
               {demo.enabled ? 'Public' : 'Private'}
             </span>
           </p>
@@ -99,7 +99,7 @@ export function DemoSettingsPanel({ workspaceId, canManage }: DemoSettingsProps)
               <p className="text-xs text-emerald-200/80">
                 Anyone with this address can read this workspace.
               </p>
-              <p className="break-all rounded bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200">
+              <p className="break-all rounded bg-canvas px-3 py-2 font-mono text-xs text-ink">
                 {publicUrl}
               </p>
             </div>
@@ -115,13 +115,13 @@ export function DemoSettingsPanel({ workspaceId, canManage }: DemoSettingsProps)
                 }}
                 className={`rounded-md border px-4 py-2 text-sm disabled:opacity-60 ${
                   demo.enabled
-                    ? 'border-red-900 text-red-300 hover:bg-red-950/40'
-                    : 'border-slate-700 text-slate-200 hover:bg-slate-800'
+                    ? 'border-line-strong text-deny hover:bg-deny-soft'
+                    : 'border-line-strong text-ink hover:bg-canvas'
                 }`}
               >
                 {busy ? 'Working…' : demo.enabled ? 'Turn off public demo' : 'Turn on public demo'}
               </button>
-              <p className="max-w-prose text-xs text-slate-500">
+              <p className="max-w-prose text-xs text-ink-faint">
                 Turning the demo off retires its address. Turning it back on creates a new one, so
                 any URL you have already shared stays dead.
               </p>

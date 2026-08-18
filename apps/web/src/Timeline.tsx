@@ -60,7 +60,7 @@ function describeType(type: EventSummary['type']): string {
  */
 function RawJson({ raw }: { readonly raw: unknown }): JSX.Element {
   return (
-    <pre className="max-h-96 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-300">
+    <pre className="max-h-96 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-relaxed text-ink-muted">
       {JSON.stringify(raw, null, 2)}
     </pre>
   );
@@ -74,70 +74,70 @@ function EventDetailPanel({
   readonly onClose: () => void;
 }): JSX.Element {
   return (
-    <div className="space-y-3 rounded-md border border-slate-700 bg-slate-900/80 p-4">
+    <div className="space-y-3 rounded-md border border-line-strong bg-surface p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
-          <h4 className="text-sm font-medium text-slate-100">{describeType(detail.type)}</h4>
-          <p className="truncate font-mono text-xs text-slate-400">{detail.eventId}</p>
+          <h4 className="text-sm font-medium text-ink">{describeType(detail.type)}</h4>
+          <p className="truncate font-mono text-xs text-ink-muted">{detail.eventId}</p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-muted hover:bg-canvas"
         >
           Close
         </button>
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-        <dt className="text-slate-500">Agent</dt>
-        <dd className="truncate text-slate-300">
+        <dt className="text-ink-faint">Agent</dt>
+        <dd className="truncate text-ink-muted">
           {detail.agent.name ?? detail.agent.agentId}{' '}
-          <span className="font-mono text-slate-500">({detail.agent.agentId})</span>
+          <span className="font-mono text-ink-faint">({detail.agent.agentId})</span>
         </dd>
 
-        <dt className="text-slate-500">Received</dt>
-        <dd className="text-slate-300" title={detail.receivedAt}>
-          {formatTime(detail.receivedAt)} <span className="text-slate-500">(server)</span>
+        <dt className="text-ink-faint">Received</dt>
+        <dd className="text-ink-muted" title={detail.receivedAt}>
+          {formatTime(detail.receivedAt)} <span className="text-ink-faint">(server)</span>
         </dd>
 
         {detail.occurredAt !== null && (
           <>
-            <dt className="text-slate-500">Occurred</dt>
-            <dd className="text-slate-400" title={detail.occurredAt}>
+            <dt className="text-ink-faint">Occurred</dt>
+            <dd className="text-ink-muted" title={detail.occurredAt}>
               {formatTime(detail.occurredAt)}{' '}
-              <span className="text-slate-500">(reported by client)</span>
+              <span className="text-ink-faint">(reported by client)</span>
             </dd>
           </>
         )}
 
         {detail.category !== null && (
           <>
-            <dt className="text-slate-500">Category</dt>
-            <dd className="text-slate-300">{detail.category}</dd>
+            <dt className="text-ink-faint">Category</dt>
+            <dd className="text-ink-muted">{detail.category}</dd>
           </>
         )}
 
         {detail.precheckId !== null && (
           <>
-            <dt className="text-slate-500">Precheck</dt>
-            <dd className="truncate font-mono text-slate-400">{detail.precheckId}</dd>
+            <dt className="text-ink-faint">Precheck</dt>
+            <dd className="truncate font-mono text-ink-muted">{detail.precheckId}</dd>
           </>
         )}
 
         {detail.block !== null && (
           <>
-            <dt className="text-slate-500">Block</dt>
-            <dd className="truncate font-mono text-slate-400">
+            <dt className="text-ink-faint">Block</dt>
+            <dd className="truncate font-mono text-ink-muted">
               {detail.block.externalBlockId ?? detail.block.id}{' '}
-              <span className="text-slate-500">({detail.block.source})</span>
+              <span className="text-ink-faint">({detail.block.source})</span>
             </dd>
           </>
         )}
       </dl>
 
       <div className="space-y-1">
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-faint">
           Raw event as validated and stored. This is the event object, not the HTTP request.
         </p>
         <RawJson raw={detail.raw} />
@@ -235,22 +235,22 @@ function TimelineResults({
 
   return (
     <div className="space-y-4">
-      {state.status === 'loading' && <p className="text-sm text-slate-400">Loading events…</p>}
+      {state.status === 'loading' && <p className="text-sm text-ink-muted">Loading events…</p>}
 
       {state.status === 'error' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {state.message}
         </p>
       )}
 
       {state.status === 'ready' && events.length === 0 && (
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-ink-faint">
           {agentFilter === '' ? 'No events yet.' : 'No events for this agent.'}
         </p>
       )}
 
       {state.status === 'ready' && events.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {events.map((event) => (
             <li key={event.id}>
               <button
@@ -258,20 +258,20 @@ function TimelineResults({
                 onClick={() => {
                   void openDetail(event.id);
                 }}
-                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-900"
+                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-surface"
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-sm text-slate-100">
+                  <span className="block truncate text-sm text-ink">
                     {describeType(event.type)}
                     {event.category !== null && (
-                      <span className="ml-2 text-xs text-slate-400">{event.category}</span>
+                      <span className="ml-2 text-xs text-ink-muted">{event.category}</span>
                     )}
                   </span>
-                  <span className="block truncate font-mono text-xs text-slate-500">
+                  <span className="block truncate font-mono text-xs text-ink-faint">
                     {event.agent.name ?? event.agent.agentId} · {event.eventId}
                   </span>
                 </span>
-                <span className="shrink-0 text-xs text-slate-400" title={event.receivedAt}>
+                <span className="shrink-0 text-xs text-ink-muted" title={event.receivedAt}>
                   {formatTime(event.receivedAt)}
                 </span>
               </button>
@@ -281,7 +281,7 @@ function TimelineResults({
       )}
 
       {detailError !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {detailError}
         </p>
       )}
@@ -302,7 +302,7 @@ function TimelineResults({
           onClick={() => {
             void loadMore();
           }}
-          className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink hover:bg-canvas disabled:opacity-60"
         >
           {loadingMore ? 'Loading…' : 'Load more'}
         </button>
@@ -340,14 +340,14 @@ export function Timeline({ workspaceId }: TimelineProps): JSX.Element {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1">
-          <h3 className="text-base font-medium">Events</h3>
-          <p className="max-w-prose text-sm text-slate-400">
+          <h1 className="text-xl font-semibold tracking-tight text-ink">Events</h1>
+          <p className="max-w-prose text-sm text-ink-muted">
             Newest first, by the time the control plane received them.
           </p>
         </div>
 
         <div className="space-y-1">
-          <label htmlFor="agent-filter" className="block text-xs text-slate-400">
+          <label htmlFor="agent-filter" className="block text-xs text-ink-muted">
             Agent
           </label>
           <select
@@ -356,7 +356,7 @@ export function Timeline({ workspaceId }: TimelineProps): JSX.Element {
             onChange={(event) => {
               setAgentFilter(event.target.value);
             }}
-            className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-slate-500"
+            className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
           >
             <option value="">All agents</option>
             {agents.map((agent) => (

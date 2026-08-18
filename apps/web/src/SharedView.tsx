@@ -78,7 +78,7 @@ type Tab = 'fleet' | 'events' | 'governance';
 /** Raw validated event JSON, rendered as a text child so it is escaped. */
 function RawJson({ raw }: { readonly raw: unknown }): JSX.Element {
   return (
-    <pre className="max-h-96 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-300">
+    <pre className="max-h-96 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-relaxed text-ink-muted">
       {JSON.stringify(raw, null, 2)}
     </pre>
   );
@@ -105,28 +105,28 @@ function FleetPanel(): JSX.Element {
   }, []);
 
   if (dead) {
-    return <p className="text-sm text-red-400">This shared link is no longer active.</p>;
+    return <p className="text-sm text-deny">This shared link is no longer active.</p>;
   }
   if (agents === null) {
-    return <p className="text-sm text-slate-400">Loading agents…</p>;
+    return <p className="text-sm text-ink-muted">Loading agents…</p>;
   }
   if (agents.length === 0) {
-    return <p className="text-sm text-slate-500">No agents in this workspace yet.</p>;
+    return <p className="text-sm text-ink-faint">No agents in this workspace yet.</p>;
   }
 
   return (
-    <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+    <ul className="divide-y divide-line rounded-md border border-line">
       {agents.map((agent) => (
         <li key={agent.id} className="space-y-2 px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <span className="min-w-0">
-              <span className="block truncate text-sm text-slate-100">
+              <span className="block truncate text-sm text-ink">
                 {agent.name ?? agent.agentId}
               </span>
-              <span className="block font-mono text-xs text-slate-500">{agent.agentId}</span>
+              <span className="block font-mono text-xs text-ink-faint">{agent.agentId}</span>
             </span>
             <span
-              className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-300"
+              className="shrink-0 rounded bg-canvas px-1.5 py-0.5 text-xs text-ink-muted"
               title={MODE_DESCRIPTION[agent.governance.mode]}
             >
               {MODE_LABEL[agent.governance.mode]}
@@ -135,14 +135,14 @@ function FleetPanel(): JSX.Element {
 
           {capsApply(agent.governance.mode) && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-              <dt className="text-slate-500">Today&rsquo;s spend</dt>
-              <dd className="font-mono text-slate-300">{describeSpend(agent.governance)}</dd>
-              <dt className="text-slate-500">Publishes today</dt>
-              <dd className="font-mono text-slate-300">{describePublishes(agent.governance)}</dd>
+              <dt className="text-ink-faint">Today&rsquo;s spend</dt>
+              <dd className="font-mono text-ink-muted">{describeSpend(agent.governance)}</dd>
+              <dt className="text-ink-faint">Publishes today</dt>
+              <dd className="font-mono text-ink-muted">{describePublishes(agent.governance)}</dd>
             </dl>
           )}
 
-          <p className="text-xs text-slate-600">
+          <p className="text-xs text-ink-faint">
             Last seen {agent.lastSeenAt === null ? 'never' : formatInstant(agent.lastSeenAt)} ·
             usage for {agent.governance.accountingDay} (UTC)
           </p>
@@ -174,18 +174,18 @@ function EventsPanel(): JSX.Element {
   }, []);
 
   if (dead) {
-    return <p className="text-sm text-red-400">This shared link is no longer active.</p>;
+    return <p className="text-sm text-deny">This shared link is no longer active.</p>;
   }
   if (events === null) {
-    return <p className="text-sm text-slate-400">Loading events…</p>;
+    return <p className="text-sm text-ink-muted">Loading events…</p>;
   }
   if (events.length === 0) {
-    return <p className="text-sm text-slate-500">No events yet.</p>;
+    return <p className="text-sm text-ink-faint">No events yet.</p>;
   }
 
   return (
     <div className="space-y-4">
-      <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+      <ul className="divide-y divide-line rounded-md border border-line">
         {events.map((event) => (
           <li key={event.id}>
             <button
@@ -195,15 +195,15 @@ function EventsPanel(): JSX.Element {
                   setSelected(await fetchSharedEvent(event.id));
                 })();
               }}
-              className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-900"
+              className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-surface"
             >
               <span className="min-w-0">
-                <span className="block truncate text-sm text-slate-100">{event.type}</span>
-                <span className="block truncate font-mono text-xs text-slate-500">
+                <span className="block truncate text-sm text-ink">{event.type}</span>
+                <span className="block truncate font-mono text-xs text-ink-faint">
                   {event.agent.name ?? event.agent.agentId} · {event.eventId}
                 </span>
               </span>
-              <span className="shrink-0 text-xs text-slate-400">
+              <span className="shrink-0 text-xs text-ink-muted">
                 {formatInstant(event.receivedAt)}
               </span>
             </button>
@@ -212,15 +212,15 @@ function EventsPanel(): JSX.Element {
       </ul>
 
       {selected !== null && (
-        <div className="space-y-2 rounded-md border border-slate-700 bg-slate-900/80 p-4">
+        <div className="space-y-2 rounded-md border border-line-strong bg-surface p-4">
           <div className="flex items-start justify-between gap-4">
-            <p className="truncate font-mono text-xs text-slate-400">{selected.eventId}</p>
+            <p className="truncate font-mono text-xs text-ink-muted">{selected.eventId}</p>
             <button
               type="button"
               onClick={() => {
                 setSelected(null);
               }}
-              className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+              className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-muted hover:bg-canvas"
             >
               Close
             </button>
@@ -258,38 +258,38 @@ function GovernancePanel(): JSX.Element {
   }, []);
 
   if (dead) {
-    return <p className="text-sm text-red-400">This shared link is no longer active.</p>;
+    return <p className="text-sm text-deny">This shared link is no longer active.</p>;
   }
   if (receipts === null || blocks === null) {
-    return <p className="text-sm text-slate-400">Loading governance…</p>;
+    return <p className="text-sm text-ink-muted">Loading governance…</p>;
   }
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h4 className="text-sm font-medium text-slate-200">Decisions</h4>
+        <h4 className="text-sm font-medium text-ink">Decisions</h4>
         {receipts.length === 0 ? (
-          <p className="text-sm text-slate-500">No decisions recorded yet.</p>
+          <p className="text-sm text-ink-faint">No decisions recorded yet.</p>
         ) : (
-          <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+          <ul className="divide-y divide-line rounded-md border border-line">
             {receipts.map((receipt) => (
               <li key={receipt.id} className="flex items-center justify-between gap-4 px-4 py-2">
                 <span className="min-w-0 text-sm">
                   <span
                     className={`mr-2 rounded px-1.5 py-0.5 text-xs ${
                       receipt.decision === 'allow'
-                        ? 'bg-slate-800 text-slate-300'
-                        : 'bg-red-950 text-red-300'
+                        ? 'bg-canvas text-ink-muted'
+                        : 'bg-deny-soft text-deny'
                     }`}
                   >
                     {receipt.decision === 'allow' ? 'Allowed' : 'Denied'}
                   </span>
-                  <span className="text-slate-300">{receipt.category}</span>
-                  <span className="ml-2 font-mono text-xs text-slate-500">
+                  <span className="text-ink-muted">{receipt.category}</span>
+                  <span className="ml-2 font-mono text-xs text-ink-faint">
                     {receipt.agent.name ?? receipt.agent.agentId}
                   </span>
                 </span>
-                <span className="shrink-0 text-xs text-slate-400">
+                <span className="shrink-0 text-xs text-ink-muted">
                   {formatInstant(receipt.createdAt)}
                 </span>
               </li>
@@ -299,26 +299,26 @@ function GovernancePanel(): JSX.Element {
       </div>
 
       <div className="space-y-2">
-        <h4 className="text-sm font-medium text-slate-200">Blocks</h4>
+        <h4 className="text-sm font-medium text-ink">Blocks</h4>
         {blocks.length === 0 ? (
-          <p className="text-sm text-slate-500">No blocks recorded yet.</p>
+          <p className="text-sm text-ink-faint">No blocks recorded yet.</p>
         ) : (
-          <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+          <ul className="divide-y divide-line rounded-md border border-line">
             {blocks.map((block) => (
               <li key={block.id} className="flex items-center justify-between gap-4 px-4 py-2">
                 <span className="min-w-0 text-sm">
                   <span
                     className={`mr-2 rounded px-1.5 py-0.5 text-xs ${
                       block.source === 'plane'
-                        ? 'bg-sky-950 text-sky-300'
-                        : 'bg-slate-800 text-slate-300'
+                        ? 'bg-accent-soft text-accent'
+                        : 'bg-canvas text-ink-muted'
                     }`}
                   >
                     {block.source === 'plane' ? 'Control plane' : 'Runtime'}
                   </span>
-                  <span className="text-slate-300">{describeRule(block.rule)}</span>
+                  <span className="text-ink-muted">{describeRule(block.rule)}</span>
                 </span>
-                <span className="shrink-0 text-xs text-slate-400">
+                <span className="shrink-0 text-xs text-ink-muted">
                   {formatInstant(block.createdAt)}
                 </span>
               </li>
@@ -358,20 +358,20 @@ export function SharedView({ token }: SharedViewProps): JSX.Element {
 
   if (state.status === 'opening') {
     return (
-      <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
-        <p className="mx-auto max-w-3xl text-sm text-slate-400">Opening shared view…</p>
+      <main className="min-h-screen bg-canvas px-6 py-16 text-ink">
+        <p className="mx-auto max-w-3xl text-sm text-ink-muted">Opening shared view…</p>
       </main>
     );
   }
 
   if (state.status === 'dead') {
     return (
-      <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
+      <main className="min-h-screen bg-canvas px-6 py-16 text-ink">
         <div className="mx-auto max-w-3xl space-y-3">
           <h1 className="text-xl font-semibold">This shared link is not available</h1>
           {/* One message for every cause. Distinguishing "revoked" from "never
               existed" would tell a holder something they should not learn. */}
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-ink-muted">
             The link may have been revoked, or it may never have been valid. Ask whoever shared it
             for a new one.
           </p>
@@ -381,14 +381,14 @@ export function SharedView({ token }: SharedViewProps): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
+    <main className="min-h-screen bg-canvas text-ink">
       <div className="mx-auto max-w-3xl space-y-6 px-6 py-12">
         <header className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber-400">
             Read-only shared view
           </p>
           <h1 className="text-2xl font-semibold tracking-tight">{state.workspaceName}</h1>
-          <p className="max-w-prose text-sm text-slate-400">
+          <p className="max-w-prose text-sm text-ink-muted">
             You are viewing this workspace through a shared link. Nothing here can be changed, and
             no sign-in is required. The link can be revoked at any time by an operator.
           </p>
@@ -405,8 +405,8 @@ export function SharedView({ token }: SharedViewProps): JSX.Element {
               }}
               className={`rounded-md border px-3 py-1.5 text-sm capitalize ${
                 tab === name
-                  ? 'border-slate-500 bg-slate-800 text-slate-100'
-                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                  ? 'border-accent bg-canvas text-ink'
+                  : 'border-line-strong text-ink-muted hover:bg-canvas'
               }`}
             >
               {name}

@@ -52,7 +52,7 @@ function DecisionBadge({ decision }: { readonly decision: 'allow' | 'deny' }): J
   return (
     <span
       className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-        decision === 'allow' ? 'bg-slate-800 text-slate-300' : 'bg-red-950 text-red-300'
+        decision === 'allow' ? 'bg-canvas text-ink-muted' : 'bg-deny-soft text-deny'
       }`}
     >
       {decision === 'allow' ? 'Allowed' : 'Denied'}
@@ -65,7 +65,7 @@ function SourceBadge({ source }: { readonly source: 'plane' | 'runtime' }): JSX.
   return (
     <span
       className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-        source === 'plane' ? 'bg-sky-950 text-sky-300' : 'bg-slate-800 text-slate-300'
+        source === 'plane' ? 'bg-accent-soft text-accent' : 'bg-canvas text-ink-muted'
       }`}
     >
       {source === 'plane' ? 'Control plane' : 'Runtime'}
@@ -82,8 +82,8 @@ function Field({
 }): JSX.Element {
   return (
     <>
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="min-w-0 break-words text-slate-300">{children}</dd>
+      <dt className="text-ink-faint">{label}</dt>
+      <dd className="min-w-0 break-words text-ink-muted">{children}</dd>
     </>
   );
 }
@@ -103,26 +103,26 @@ function ReceiptDetailPanel({
   readonly onClose: () => void;
 }): JSX.Element {
   return (
-    <div className="space-y-4 rounded-md border border-slate-700 bg-slate-900/80 p-4">
+    <div className="space-y-4 rounded-md border border-line-strong bg-surface p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
-          <h4 className="flex items-center gap-2 text-sm font-medium text-slate-100">
+          <h4 className="flex items-center gap-2 text-sm font-medium text-ink">
             <DecisionBadge decision={detail.decision} />
             {detail.category}
           </h4>
-          <p className="truncate font-mono text-xs text-slate-400">{detail.id}</p>
+          <p className="truncate font-mono text-xs text-ink-muted">{detail.id}</p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-muted hover:bg-canvas"
         >
           Close
         </button>
       </div>
 
       {detail.reason !== null && (
-        <p className="rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+        <p className="rounded-md border border-line-strong/60 bg-deny-soft px-3 py-2 text-sm text-deny">
           {REASON_LABEL[detail.reason]}
         </p>
       )}
@@ -130,7 +130,7 @@ function ReceiptDetailPanel({
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
         <Field label="Agent">
           {detail.agent.name ?? detail.agent.agentId}{' '}
-          <span className="font-mono text-slate-500">({detail.agent.agentId})</span>
+          <span className="font-mono text-ink-faint">({detail.agent.agentId})</span>
         </Field>
         <Field label="Action">
           <span className="font-mono">{detail.actionId}</span>
@@ -139,13 +139,13 @@ function ReceiptDetailPanel({
           <span title={detail.createdAt}>{formatInstant(detail.createdAt)}</span>
         </Field>
         <Field label="Accounting day">
-          {detail.accountingDay} <span className="text-slate-500">(UTC)</span>
+          {detail.accountingDay} <span className="text-ink-faint">(UTC)</span>
         </Field>
       </dl>
 
       <div className="space-y-1">
-        <h5 className="text-xs font-medium text-slate-300">Policy applied at decision time</h5>
-        <p className="text-xs text-slate-500">
+        <h5 className="text-xs font-medium text-ink-muted">Policy applied at decision time</h5>
+        <p className="text-xs text-ink-faint">
           Recorded when the decision was made. Current policy may differ.
         </p>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 pt-1 text-xs">
@@ -165,7 +165,7 @@ function ReceiptDetailPanel({
       </div>
 
       <div className="space-y-1">
-        <h5 className="text-xs font-medium text-slate-300">Request and ledger</h5>
+        <h5 className="text-xs font-medium text-ink-muted">Request and ledger</h5>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 pt-1 text-xs">
           {detail.requestedAmountUsd !== null && (
             <Field label="Requested">{formatUsd(detail.requestedAmountUsd)}</Field>
@@ -193,7 +193,7 @@ function ReceiptDetailPanel({
             detail.ledgerSpendBeforeUsd === null &&
             detail.ledgerPublishBefore === null && (
               <Field label="Ledger">
-                <span className="text-slate-500">
+                <span className="text-ink-faint">
                   No daily ledger applied to this decision.
                 </span>
               </Field>
@@ -202,9 +202,9 @@ function ReceiptDetailPanel({
       </div>
 
       {detail.block !== null && (
-        <p className="text-xs text-slate-400">
-          Recorded a block under <span className="text-slate-300">{describeRule(detail.block.rule)}</span>{' '}
-          <span className="font-mono text-slate-500">({detail.block.id})</span>
+        <p className="text-xs text-ink-muted">
+          Recorded a block under <span className="text-ink-muted">{describeRule(detail.block.rule)}</span>{' '}
+          <span className="font-mono text-ink-faint">({detail.block.id})</span>
         </p>
       )}
     </div>
@@ -226,31 +226,31 @@ function BlockDetailPanel({
   readonly onClose: () => void;
 }): JSX.Element {
   return (
-    <div className="space-y-4 rounded-md border border-slate-700 bg-slate-900/80 p-4">
+    <div className="space-y-4 rounded-md border border-line-strong bg-surface p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
-          <h4 className="flex items-center gap-2 text-sm font-medium text-slate-100">
+          <h4 className="flex items-center gap-2 text-sm font-medium text-ink">
             <SourceBadge source={detail.source} />
             {describeRule(detail.rule)}
           </h4>
-          <p className="truncate font-mono text-xs text-slate-400">{detail.id}</p>
+          <p className="truncate font-mono text-xs text-ink-muted">{detail.id}</p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-muted hover:bg-canvas"
         >
           Close
         </button>
       </div>
 
-      <p className="text-sm text-slate-200">{detail.reason}</p>
+      <p className="text-sm text-ink">{detail.reason}</p>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
         <Field label="Owner">{describeBlockOwner(detail.source)}</Field>
         <Field label="Agent">
           {detail.agent.name ?? detail.agent.agentId}{' '}
-          <span className="font-mono text-slate-500">({detail.agent.agentId})</span>
+          <span className="font-mono text-ink-faint">({detail.agent.agentId})</span>
         </Field>
         <Field label="Category">{detail.category}</Field>
         <Field label="Recorded">
@@ -269,7 +269,7 @@ function BlockDetailPanel({
 
         <Field label="Decision">
           {detail.precheckId === null ? (
-            <span className="text-slate-500">
+            <span className="text-ink-faint">
               Reported by the runtime. The control plane made no decision for this block.
             </span>
           ) : (
@@ -373,20 +373,20 @@ function ReceiptResults({
 
   return (
     <div className="space-y-4">
-      {state.status === 'loading' && <p className="text-sm text-slate-400">Loading decisions…</p>}
+      {state.status === 'loading' && <p className="text-sm text-ink-muted">Loading decisions…</p>}
 
       {state.status === 'error' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {state.message}
         </p>
       )}
 
       {state.status === 'ready' && receipts.length === 0 && (
-        <p className="text-sm text-slate-500">No decisions recorded yet.</p>
+        <p className="text-sm text-ink-faint">No decisions recorded yet.</p>
       )}
 
       {state.status === 'ready' && receipts.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {receipts.map((receipt) => (
             <li key={receipt.id}>
               <button
@@ -394,23 +394,23 @@ function ReceiptResults({
                 onClick={() => {
                   void openDetail(receipt.id);
                 }}
-                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-900"
+                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-surface"
               >
                 <span className="min-w-0">
-                  <span className="flex items-center gap-2 text-sm text-slate-100">
+                  <span className="flex items-center gap-2 text-sm text-ink">
                     <DecisionBadge decision={receipt.decision} />
                     <span className="truncate">{receipt.category}</span>
                     {receipt.reason !== null && (
-                      <span className="truncate text-xs text-red-300">
+                      <span className="truncate text-xs text-deny">
                         {REASON_LABEL[receipt.reason]}
                       </span>
                     )}
                   </span>
-                  <span className="block truncate font-mono text-xs text-slate-500">
+                  <span className="block truncate font-mono text-xs text-ink-faint">
                     {receipt.agent.name ?? receipt.agent.agentId} · {receipt.actionId}
                   </span>
                 </span>
-                <span className="shrink-0 text-xs text-slate-400" title={receipt.createdAt}>
+                <span className="shrink-0 text-xs text-ink-muted" title={receipt.createdAt}>
                   {formatInstant(receipt.createdAt)}
                 </span>
               </button>
@@ -420,7 +420,7 @@ function ReceiptResults({
       )}
 
       {detailError !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {detailError}
         </p>
       )}
@@ -441,7 +441,7 @@ function ReceiptResults({
           onClick={() => {
             void loadMore();
           }}
-          className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink hover:bg-canvas disabled:opacity-60"
         >
           {loadingMore ? 'Loading…' : 'Load more'}
         </button>
@@ -535,20 +535,20 @@ function BlockResults({
 
   return (
     <div className="space-y-4">
-      {state.status === 'loading' && <p className="text-sm text-slate-400">Loading blocks…</p>}
+      {state.status === 'loading' && <p className="text-sm text-ink-muted">Loading blocks…</p>}
 
       {state.status === 'error' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {state.message}
         </p>
       )}
 
       {state.status === 'ready' && blocks.length === 0 && (
-        <p className="text-sm text-slate-500">No blocks recorded yet.</p>
+        <p className="text-sm text-ink-faint">No blocks recorded yet.</p>
       )}
 
       {state.status === 'ready' && blocks.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {blocks.map((block) => (
             <li key={block.id}>
               <button
@@ -556,18 +556,18 @@ function BlockResults({
                 onClick={() => {
                   void openDetail(block.id);
                 }}
-                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-slate-900"
+                className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-surface"
               >
                 <span className="min-w-0">
-                  <span className="flex items-center gap-2 text-sm text-slate-100">
+                  <span className="flex items-center gap-2 text-sm text-ink">
                     <SourceBadge source={block.source} />
                     <span className="truncate">{describeRule(block.rule)}</span>
                   </span>
-                  <span className="block truncate font-mono text-xs text-slate-500">
+                  <span className="block truncate font-mono text-xs text-ink-faint">
                     {block.agent.name ?? block.agent.agentId} · {block.category}
                   </span>
                 </span>
-                <span className="shrink-0 text-xs text-slate-400" title={block.createdAt}>
+                <span className="shrink-0 text-xs text-ink-muted" title={block.createdAt}>
                   {formatInstant(block.createdAt)}
                 </span>
               </button>
@@ -577,7 +577,7 @@ function BlockResults({
       )}
 
       {detailError !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {detailError}
         </p>
       )}
@@ -598,7 +598,7 @@ function BlockResults({
           onClick={() => {
             void loadMore();
           }}
-          className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink hover:bg-canvas disabled:opacity-60"
         >
           {loadingMore ? 'Loading…' : 'Load more'}
         </button>
@@ -638,8 +638,8 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <h3 className="text-base font-medium">Governance</h3>
-        <p className="max-w-prose text-sm text-slate-400">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Governance</h1>
+        <p className="max-w-prose text-sm text-ink-muted">
           Every precheck decision the control plane made, and every block recorded. Newest first.
           Each record shows the policy that applied when it was made.
         </p>
@@ -658,8 +658,8 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
               }}
               className={`rounded-md border px-3 py-1.5 text-sm ${
                 view === tab
-                  ? 'border-slate-500 bg-slate-800 text-slate-100'
-                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                  ? 'border-accent bg-canvas text-ink'
+                  : 'border-line-strong text-ink-muted hover:bg-canvas'
               }`}
             >
               {tab === 'receipts' ? 'Decisions' : 'Blocks'}
@@ -669,7 +669,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
-            <label htmlFor="governance-agent" className="block text-xs text-slate-400">
+            <label htmlFor="governance-agent" className="block text-xs text-ink-muted">
               Agent
             </label>
             <select
@@ -678,7 +678,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
               onChange={(event) => {
                 setAgentFilter(event.target.value);
               }}
-              className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-slate-500"
+              className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
             >
               <option value="">All agents</option>
               {agents.map((agent) => (
@@ -691,7 +691,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
 
           {view === 'receipts' ? (
             <div className="space-y-1">
-              <label htmlFor="governance-decision" className="block text-xs text-slate-400">
+              <label htmlFor="governance-decision" className="block text-xs text-ink-muted">
                 Decision
               </label>
               <select
@@ -700,7 +700,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
                 onChange={(event) => {
                   setDecisionFilter(event.target.value as '' | 'allow' | 'deny');
                 }}
-                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-slate-500"
+                className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
                 <option value="">All decisions</option>
                 <option value="allow">Allowed</option>
@@ -709,7 +709,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
             </div>
           ) : (
             <div className="space-y-1">
-              <label htmlFor="governance-source" className="block text-xs text-slate-400">
+              <label htmlFor="governance-source" className="block text-xs text-ink-muted">
                 Recorded by
               </label>
               <select
@@ -718,7 +718,7 @@ export function Governance({ workspaceId }: GovernanceProps): JSX.Element {
                 onChange={(event) => {
                   setSourceFilter(event.target.value as '' | 'plane' | 'runtime');
                 }}
-                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-slate-500"
+                className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
               >
                 <option value="">Anyone</option>
                 <option value="plane">Control plane</option>

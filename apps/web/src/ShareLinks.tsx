@@ -92,28 +92,28 @@ export function ShareLinks({ workspaceId, canManage }: ShareLinksProps): JSX.Ele
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <h3 className="text-base font-medium">Share links</h3>
-        <p className="max-w-prose text-sm text-slate-400">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Share links</h1>
+        <p className="max-w-prose text-sm text-ink-muted">
           A share link gives read-only access to this workspace to anyone who has the URL, without
           signing in. Revoking a link ends that access immediately.
         </p>
       </div>
 
       {error !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {error}
         </p>
       )}
 
       {issuedUrl !== null && (
-        <div className="space-y-2 rounded-md border border-amber-900 bg-amber-950/30 px-4 py-3">
-          <p className="text-sm font-medium text-amber-200">
+        <div className="space-y-2 rounded-md border border-amber-900 bg-warn-soft px-4 py-3">
+          <p className="text-sm font-medium text-warn">
             Copy this link now &mdash; it will not be shown again.
           </p>
-          <p className="break-all rounded bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200">
+          <p className="break-all rounded bg-canvas px-3 py-2 font-mono text-xs text-ink">
             {issuedUrl}
           </p>
-          <p className="text-xs text-amber-200/80">
+          <p className="text-xs text-warn/80">
             Anyone with this URL can read this workspace. Store it somewhere you would store a
             password. If you lose it, revoke the link and create another.
           </p>
@@ -122,7 +122,7 @@ export function ShareLinks({ workspaceId, canManage }: ShareLinksProps): JSX.Ele
             onClick={() => {
               setIssuedUrl(null);
             }}
-            className="rounded-md border border-amber-800 px-3 py-1.5 text-xs text-amber-100 hover:bg-amber-900/40"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-xs text-amber-100 hover:bg-amber-900/40"
           >
             I have copied it
           </button>
@@ -136,27 +136,27 @@ export function ShareLinks({ workspaceId, canManage }: ShareLinksProps): JSX.Ele
           onClick={() => {
             void onCreate();
           }}
-          className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink hover:bg-canvas disabled:opacity-60"
         >
           {busy ? 'Working…' : 'Create share link'}
         </button>
       )}
 
       {links !== null && links.length === 0 && (
-        <p className="text-sm text-slate-500">No share links yet.</p>
+        <p className="text-sm text-ink-faint">No share links yet.</p>
       )}
 
       {links !== null && links.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {links.map((link) => (
             <li key={link.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <span className="min-w-0">
                 {/* The prefix is independent random material, not part of the
                     secret. It exists so two links can be told apart. */}
-                <span className="block truncate font-mono text-xs text-slate-300">
+                <span className="block truncate font-mono text-xs text-ink-muted">
                   {link.tokenPrefix}…
                 </span>
-                <span className="block text-xs text-slate-500">
+                <span className="block text-xs text-ink-faint">
                   {link.revokedAt === null
                     ? `Active · created ${new Date(link.createdAt).toLocaleString()}`
                     : `Revoked ${new Date(link.revokedAt).toLocaleString()}`}
@@ -169,7 +169,7 @@ export function ShareLinks({ workspaceId, canManage }: ShareLinksProps): JSX.Ele
                   onClick={() => {
                     void onRevoke(link.id);
                   }}
-                  className="shrink-0 rounded-md border border-red-900 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950/40 disabled:opacity-60"
+                  className="shrink-0 rounded-md border border-line-strong px-3 py-1.5 text-xs text-deny hover:bg-deny-soft disabled:opacity-60"
                 >
                   Revoke
                 </button>

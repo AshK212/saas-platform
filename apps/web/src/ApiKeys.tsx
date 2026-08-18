@@ -121,7 +121,7 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
 
   if (!canManage) {
     return (
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-ink-muted">
         Only workspace operators can view and manage API keys.
       </p>
     );
@@ -130,19 +130,19 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
   return (
     <div className="space-y-5">
       <div className="space-y-1">
-        <h3 className="text-base font-medium">API keys</h3>
-        <p className="max-w-prose text-sm text-slate-400">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">API keys</h1>
+        <p className="max-w-prose text-sm text-ink-muted">
           Keys authenticate agents and the simulator. They are bound to this workspace and cannot
           reach any other.
         </p>
       </div>
 
       {issued !== null && (
-        <div className="space-y-3 rounded-md border border-amber-800 bg-amber-950/30 p-4">
-          <p className="text-sm font-medium text-amber-200">
+        <div className="space-y-3 rounded-md border border-line-strong bg-warn-soft p-4">
+          <p className="text-sm font-medium text-warn">
             Copy this key now. It will not be shown again.
           </p>
-          <code className="block break-all rounded bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100">
+          <code className="block break-all rounded bg-canvas px-3 py-2 font-mono text-xs text-ink">
             {issued.key}
           </code>
           <div className="flex flex-wrap gap-2">
@@ -151,7 +151,7 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
               onClick={() => {
                 void onCopy();
               }}
-              className="rounded-md bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-900"
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white"
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -162,7 +162,7 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
                 setIssued(null);
                 setCopied(false);
               }}
-              className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink"
             >
               Done
             </button>
@@ -170,22 +170,22 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
         </div>
       )}
 
-      {state.status === 'loading' && <p className="text-sm text-slate-400">Loading keys…</p>}
+      {state.status === 'loading' && <p className="text-sm text-ink-muted">Loading keys…</p>}
 
       {state.status === 'error' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {state.message}
         </p>
       )}
 
       {state.status === 'ready' && state.keys.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {state.keys.map((key) => (
             <li key={key.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <span className="min-w-0">
-                <span className="block truncate text-sm text-slate-100">{key.name}</span>
-                <span className="block font-mono text-xs text-slate-500">{key.keyPrefix}…</span>
-                <span className="text-xs uppercase tracking-wide text-slate-500">
+                <span className="block truncate text-sm text-ink">{key.name}</span>
+                <span className="block font-mono text-xs text-ink-faint">{key.keyPrefix}…</span>
+                <span className="text-xs uppercase tracking-wide text-ink-faint">
                   {key.status}
                   {key.lastUsedAt !== null && ` · last used ${key.lastUsedAt.slice(0, 10)}`}
                 </span>
@@ -196,12 +196,12 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
                   onClick={() => {
                     void onRevoke(key.id);
                   }}
-                  className="shrink-0 rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-300 hover:bg-red-950/40"
+                  className="shrink-0 rounded-md border border-line-strong px-3 py-1.5 text-sm text-deny hover:bg-deny-soft"
                 >
                   Revoke
                 </button>
               ) : (
-                <span className="shrink-0 text-xs text-slate-600">revoked</span>
+                <span className="shrink-0 text-xs text-ink-faint">revoked</span>
               )}
             </li>
           ))}
@@ -209,7 +209,7 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
       )}
 
       {state.status === 'ready' && state.keys.length === 0 && (
-        <p className="text-sm text-slate-500">No API keys yet.</p>
+        <p className="text-sm text-ink-faint">No API keys yet.</p>
       )}
 
       <form
@@ -219,7 +219,7 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
         }}
       >
         <div className="min-w-0 flex-1 space-y-2">
-          <label htmlFor="api-key-name" className="block text-sm text-slate-300">
+          <label htmlFor="api-key-name" className="block text-sm text-ink-muted">
             New key name
           </label>
           <input
@@ -231,21 +231,21 @@ export function ApiKeys({ workspaceId, canManage }: ApiKeysProps): JSX.Element {
             onChange={(event) => {
               setName(event.target.value);
             }}
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 outline-none focus:border-slate-500"
+            className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-ink outline-none focus:border-accent"
             placeholder="Simulator"
           />
         </div>
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-900 disabled:opacity-60"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
           {busy ? 'Creating…' : 'Create key'}
         </button>
       </form>
 
       {error !== '' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {error}
         </p>
       )}

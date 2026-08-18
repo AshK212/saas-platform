@@ -378,3 +378,9 @@ The public demo is no longer on that list — Step 22 implemented it. See
 Each belongs to a later step. See
 [acceptance-traceability.md](docs/acceptance-traceability.md) for per-criterion
 status.
+
+
+
+in dev mode we can get email verify temp link using this.
+node --env-file=.env scripts/dev-magic-link.mjs 8klancer@gmail.com
+

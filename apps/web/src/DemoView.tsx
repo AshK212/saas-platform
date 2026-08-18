@@ -85,7 +85,7 @@ const REFRESH_INTERVAL_MS = 15_000;
 /** Raw validated event JSON, rendered as a text child so it is escaped. */
 function RawJson({ raw }: { readonly raw: unknown }): JSX.Element {
   return (
-    <pre className="max-h-80 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-300">
+    <pre className="max-h-80 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-relaxed text-ink-muted">
       {JSON.stringify(raw, null, 2)}
     </pre>
   );
@@ -154,20 +154,20 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
 
   if (state.status === 'loading') {
     return (
-      <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
-        <p className="mx-auto max-w-4xl text-sm text-slate-400">Loading demo…</p>
+      <main className="min-h-screen bg-canvas px-6 py-16 text-ink">
+        <p className="mx-auto max-w-4xl text-sm text-ink-muted">Loading demo…</p>
       </main>
     );
   }
 
   if (state.status === 'unavailable') {
     return (
-      <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
+      <main className="min-h-screen bg-canvas px-6 py-16 text-ink">
         <div className="mx-auto max-w-4xl space-y-3">
           <h1 className="text-xl font-semibold">This demo is not available</h1>
           {/* One message for every cause. A visitor does not need to learn
               that a workspace exists but is private. */}
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-ink-muted">
             The demo may have been turned off, or this address may never have been valid.
           </p>
         </div>
@@ -176,14 +176,14 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
+    <main className="min-h-screen bg-canvas text-ink">
       <div className="mx-auto max-w-4xl space-y-8 px-6 py-12">
         <header className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-emerald-400">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-ok">
             Public demo &middot; read-only
           </p>
           <h1 className="text-2xl font-semibold tracking-tight">{state.workspaceName}</h1>
-          <p className="max-w-prose text-sm text-slate-400">
+          <p className="max-w-prose text-sm text-ink-muted">
             A live control plane governing a small agent fleet. Everything below is real: the
             spend totals are the authoritative daily ledger, and each block was written by the
             plane when it refused an action. Updates every {String(REFRESH_INTERVAL_MS / 1000)}{' '}
@@ -194,22 +194,22 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
         <section className="space-y-3">
           <h2 className="text-base font-medium">Fleet</h2>
           {data === null || data.agents.length === 0 ? (
-            <p className="text-sm text-slate-500">No agents are reporting yet.</p>
+            <p className="text-sm text-ink-faint">No agents are reporting yet.</p>
           ) : (
-            <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+            <ul className="divide-y divide-line rounded-md border border-line">
               {data.agents.map((agent) => (
                 <li key={agent.id} className="space-y-2 px-4 py-3">
                   <div className="flex items-center justify-between gap-4">
                     <span className="min-w-0">
-                      <span className="block truncate text-sm text-slate-100">
+                      <span className="block truncate text-sm text-ink">
                         {agent.name ?? agent.agentId}
                       </span>
-                      <span className="block font-mono text-xs text-slate-500">
+                      <span className="block font-mono text-xs text-ink-faint">
                         {agent.agentId}
                       </span>
                     </span>
                     <span
-                      className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-300"
+                      className="shrink-0 rounded bg-canvas px-1.5 py-0.5 text-xs text-ink-muted"
                       title={MODE_DESCRIPTION[agent.governance.mode]}
                     >
                       {MODE_LABEL[agent.governance.mode]}
@@ -218,16 +218,16 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
 
                   {capsApply(agent.governance.mode) && (
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-                      <dt className="text-slate-500">Today&rsquo;s spend</dt>
-                      <dd className="font-mono text-slate-300">{describeSpend(agent.governance)}</dd>
-                      <dt className="text-slate-500">Publishes today</dt>
-                      <dd className="font-mono text-slate-300">
+                      <dt className="text-ink-faint">Today&rsquo;s spend</dt>
+                      <dd className="font-mono text-ink-muted">{describeSpend(agent.governance)}</dd>
+                      <dt className="text-ink-faint">Publishes today</dt>
+                      <dd className="font-mono text-ink-muted">
                         {describePublishes(agent.governance)}
                       </dd>
                     </dl>
                   )}
 
-                  <p className="text-xs text-slate-600">
+                  <p className="text-xs text-ink-faint">
                     Last seen{' '}
                     {agent.lastSeenAt === null ? 'never' : formatInstant(agent.lastSeenAt)}
                   </p>
@@ -239,32 +239,32 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
 
         <section className="space-y-3">
           <h2 className="text-base font-medium">Blocks</h2>
-          <p className="max-w-prose text-sm text-slate-400">
+          <p className="max-w-prose text-sm text-ink-muted">
             Each of these is a real refusal. The plane evaluated the request against the
             configured policy, denied it, and recorded the decision.
           </p>
           {data === null || data.blocks.length === 0 ? (
-            <p className="text-sm text-slate-500">Nothing has been blocked yet.</p>
+            <p className="text-sm text-ink-faint">Nothing has been blocked yet.</p>
           ) : (
-            <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+            <ul className="divide-y divide-line rounded-md border border-line">
               {data.blocks.map((block) => (
                 <li key={block.id} className="flex items-center justify-between gap-4 px-4 py-2">
                   <span className="min-w-0 text-sm">
                     <span
                       className={`mr-2 rounded px-1.5 py-0.5 text-xs ${
                         block.source === 'plane'
-                          ? 'bg-sky-950 text-sky-300'
-                          : 'bg-slate-800 text-slate-300'
+                          ? 'bg-accent-soft text-accent'
+                          : 'bg-canvas text-ink-muted'
                       }`}
                     >
                       {block.source === 'plane' ? 'Control plane' : 'Runtime'}
                     </span>
-                    <span className="text-slate-300">{describeRule(block.rule)}</span>
-                    <span className="ml-2 font-mono text-xs text-slate-500">
+                    <span className="text-ink-muted">{describeRule(block.rule)}</span>
+                    <span className="ml-2 font-mono text-xs text-ink-faint">
                       {block.agent.name ?? block.agent.agentId}
                     </span>
                   </span>
-                  <span className="shrink-0 text-xs text-slate-400">
+                  <span className="shrink-0 text-xs text-ink-muted">
                     {formatInstant(block.createdAt)}
                   </span>
                 </li>
@@ -276,24 +276,24 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
         <section className="space-y-3">
           <h2 className="text-base font-medium">Decisions</h2>
           {data === null || data.receipts.length === 0 ? (
-            <p className="text-sm text-slate-500">No decisions recorded yet.</p>
+            <p className="text-sm text-ink-faint">No decisions recorded yet.</p>
           ) : (
-            <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+            <ul className="divide-y divide-line rounded-md border border-line">
               {data.receipts.slice(0, 10).map((receipt) => (
                 <li key={receipt.id} className="flex items-center justify-between gap-4 px-4 py-2">
                   <span className="min-w-0 text-sm">
                     <span
                       className={`mr-2 rounded px-1.5 py-0.5 text-xs ${
                         receipt.decision === 'allow'
-                          ? 'bg-slate-800 text-slate-300'
-                          : 'bg-red-950 text-red-300'
+                          ? 'bg-canvas text-ink-muted'
+                          : 'bg-deny-soft text-deny'
                       }`}
                     >
                       {receipt.decision === 'allow' ? 'Allowed' : 'Denied'}
                     </span>
-                    <span className="text-slate-300">{receipt.category}</span>
+                    <span className="text-ink-muted">{receipt.category}</span>
                   </span>
-                  <span className="shrink-0 text-xs text-slate-400">
+                  <span className="shrink-0 text-xs text-ink-muted">
                     {formatInstant(receipt.createdAt)}
                   </span>
                 </li>
@@ -305,9 +305,9 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
         <section className="space-y-3">
           <h2 className="text-base font-medium">Activity</h2>
           {data === null || data.events.length === 0 ? (
-            <p className="text-sm text-slate-500">No events yet.</p>
+            <p className="text-sm text-ink-faint">No events yet.</p>
           ) : (
-            <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+            <ul className="divide-y divide-line rounded-md border border-line">
               {data.events.slice(0, 15).map((event) => (
                 <li key={event.id}>
                   <button
@@ -317,15 +317,15 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
                         setSelected(await fetchDemoEvent(slug, event.id));
                       })();
                     }}
-                    className="flex w-full items-center justify-between gap-4 px-4 py-2 text-left hover:bg-slate-900"
+                    className="flex w-full items-center justify-between gap-4 px-4 py-2 text-left hover:bg-surface"
                   >
                     <span className="min-w-0 text-sm">
-                      <span className="text-slate-100">{event.type}</span>
-                      <span className="ml-2 font-mono text-xs text-slate-500">
+                      <span className="text-ink">{event.type}</span>
+                      <span className="ml-2 font-mono text-xs text-ink-faint">
                         {event.agent.name ?? event.agent.agentId}
                       </span>
                     </span>
-                    <span className="shrink-0 text-xs text-slate-400">
+                    <span className="shrink-0 text-xs text-ink-muted">
                       {formatInstant(event.receivedAt)}
                     </span>
                   </button>
@@ -335,15 +335,15 @@ export function DemoView({ slug }: DemoViewProps): JSX.Element {
           )}
 
           {selected !== null && (
-            <div className="space-y-2 rounded-md border border-slate-700 bg-slate-900/80 p-4">
+            <div className="space-y-2 rounded-md border border-line-strong bg-surface p-4">
               <div className="flex items-start justify-between gap-4">
-                <p className="truncate font-mono text-xs text-slate-400">{selected.eventId}</p>
+                <p className="truncate font-mono text-xs text-ink-muted">{selected.eventId}</p>
                 <button
                   type="button"
                   onClick={() => {
                     setSelected(null);
                   }}
-                  className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                  className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-muted hover:bg-canvas"
                 >
                   Close
                 </button>

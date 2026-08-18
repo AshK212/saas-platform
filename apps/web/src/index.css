@@ -1,1 +1,91 @@
 @import 'tailwindcss';
+
+/*
+ * Design tokens for the control plane.
+ *
+ * Two surfaces, deliberately different in temperature:
+ *
+ *   - NAVIGATION is deep navy. It is chrome: always present, never the thing
+ *     being read, and dark enough that the eye skips past it to the content.
+ *   - THE WORKSPACE is warm off-white. Operators read dense tables and audit
+ *     records here for long stretches, and a warm ground is easier to sit with
+ *     than pure white.
+ *
+ * The accent is a restrained indigo, used for interactive intent and almost
+ * nothing else. Status colour is reserved for status, so that a red chip always
+ * means a refusal rather than decoration.
+ */
+@theme {
+  /* Navigation surface */
+  --color-nav-950: oklch(0.19 0.035 265);
+  --color-nav-900: oklch(0.23 0.038 265);
+  --color-nav-800: oklch(0.28 0.04 265);
+  --color-nav-700: oklch(0.36 0.04 265);
+  --color-nav-400: oklch(0.68 0.03 265);
+  --color-nav-300: oklch(0.78 0.025 265);
+
+  /* Workspace surface */
+  --color-canvas: oklch(0.985 0.003 95);
+  --color-surface: oklch(1 0 0);
+  --color-line: oklch(0.92 0.005 265);
+  --color-line-strong: oklch(0.86 0.008 265);
+
+  /* Text */
+  --color-ink: oklch(0.24 0.02 265);
+  --color-ink-muted: oklch(0.52 0.02 265);
+  --color-ink-faint: oklch(0.64 0.015 265);
+
+  /* Accent — interactive intent only */
+  --color-accent: oklch(0.52 0.19 279);
+  --color-accent-hover: oklch(0.46 0.2 279);
+  --color-accent-soft: oklch(0.96 0.02 279);
+  --color-accent-line: oklch(0.88 0.05 279);
+
+  /* Status — meaning, never decoration */
+  --color-ok: oklch(0.55 0.13 155);
+  --color-ok-soft: oklch(0.96 0.03 155);
+  --color-warn: oklch(0.62 0.14 75);
+  --color-warn-soft: oklch(0.97 0.04 85);
+  --color-deny: oklch(0.55 0.19 25);
+  --color-deny-soft: oklch(0.96 0.03 25);
+
+  --radius-card: 0.625rem;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-feature-settings: 'cv05', 'ss01';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * One focus treatment for the whole app, on :focus-visible only — so a
+   * pointer user never sees a ring they did not ask for, while a keyboard user
+   * always does. Never removed anywhere; the accessibility guard depends on it.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Tabular figures everywhere numbers are compared down a column. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

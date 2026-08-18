@@ -72,10 +72,10 @@ function describeLastSeen(iso: string | null, now: number): string {
 function ModeBadge({ mode }: { readonly mode: AgentGovernance['mode'] }): JSX.Element {
   const tone =
     mode === 'paused'
-      ? 'bg-amber-950 text-amber-300'
+      ? 'bg-warn-soft text-warn'
       : mode === 'budgeted'
-        ? 'bg-sky-950 text-sky-300'
-        : 'bg-slate-800 text-slate-300';
+        ? 'bg-accent-soft text-accent'
+        : 'bg-canvas text-ink-muted';
 
   return (
     <span
@@ -103,22 +103,22 @@ function GovernanceSummary({
   readonly governance: AgentGovernance;
 }): JSX.Element {
   return (
-    <div className="space-y-1 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs">
+    <div className="space-y-1 rounded-md border border-line bg-surface px-3 py-2 text-xs">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <ModeBadge mode={governance.mode} />
-        <span className="text-slate-500">{MODE_DESCRIPTION[governance.mode]}</span>
+        <span className="text-ink-faint">{MODE_DESCRIPTION[governance.mode]}</span>
       </div>
 
       {capsApply(governance.mode) && (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pt-1">
-          <dt className="text-slate-500">Today&rsquo;s spend</dt>
-          <dd className="font-mono text-slate-300">{describeSpend(governance)}</dd>
-          <dt className="text-slate-500">Publishes today</dt>
-          <dd className="font-mono text-slate-300">{describePublishes(governance)}</dd>
+          <dt className="text-ink-faint">Today&rsquo;s spend</dt>
+          <dd className="font-mono text-ink-muted">{describeSpend(governance)}</dd>
+          <dt className="text-ink-faint">Publishes today</dt>
+          <dd className="font-mono text-ink-muted">{describePublishes(governance)}</dd>
         </dl>
       )}
 
-      <p className="pt-0.5 text-slate-600">
+      <p className="pt-0.5 text-ink-faint">
         Usage for {governance.accountingDay} (UTC), as recorded by the control plane.
       </p>
     </div>
@@ -160,38 +160,38 @@ export function Agents({ workspaceId, canManagePolicy }: AgentsProps): JSX.Eleme
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <h3 className="text-base font-medium">Agents</h3>
-        <p className="max-w-prose text-sm text-slate-400">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Agents</h1>
+        <p className="max-w-prose text-sm text-ink-muted">
           Agents register themselves using a workspace API key. Last seen is recorded by the
           server.
         </p>
       </div>
 
-      {state.status === 'loading' && <p className="text-sm text-slate-400">Loading agents…</p>}
+      {state.status === 'loading' && <p className="text-sm text-ink-muted">Loading agents…</p>}
 
       {state.status === 'error' && (
-        <p role="alert" className="text-sm text-red-400">
+        <p role="alert" className="text-sm text-deny">
           {state.message}
         </p>
       )}
 
       {state.status === 'ready' && state.agents.length === 0 && (
-        <p className="text-sm text-slate-500">No agents connected yet.</p>
+        <p className="text-sm text-ink-faint">No agents connected yet.</p>
       )}
 
       {state.status === 'ready' && state.agents.length > 0 && (
-        <ul className="divide-y divide-slate-800 rounded-md border border-slate-800">
+        <ul className="divide-y divide-line rounded-md border border-line">
           {state.agents.map((agent) => (
             <li key={agent.id} className="space-y-3 px-4 py-3">
               <div className="flex items-center justify-between gap-4">
                 <span className="min-w-0">
-                  <span className="block truncate text-sm text-slate-100">
+                  <span className="block truncate text-sm text-ink">
                     {agent.name ?? agent.agentId}
                   </span>
-                  <span className="block font-mono text-xs text-slate-500">{agent.agentId}</span>
+                  <span className="block font-mono text-xs text-ink-faint">{agent.agentId}</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-3">
-                  <span className="text-xs text-slate-400" title={agent.lastSeenAt ?? 'never seen'}>
+                  <span className="text-xs text-ink-muted" title={agent.lastSeenAt ?? 'never seen'}>
                     {describeLastSeen(agent.lastSeenAt, loadedAt)}
                   </span>
                   <button
@@ -199,7 +199,7 @@ export function Agents({ workspaceId, canManagePolicy }: AgentsProps): JSX.Eleme
                     onClick={() => {
                       setEditing((current) => (current === agent.id ? null : agent.id));
                     }}
-                    className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-xs text-ink hover:bg-canvas"
                   >
                     {editing === agent.id ? 'Close' : 'Policy'}
                   </button>
